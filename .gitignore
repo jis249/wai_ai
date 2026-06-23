@@ -1,0 +1,45 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Binaries
+bin/
+tmp/
+
+# Build output
+ui/dist/
+ui/.vite/
+
+# Config (never commit secrets)
+wai.yaml
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+data/
+*.log
+
+# Environment
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Claude Code (auto-generated, never commit)
+.claude/

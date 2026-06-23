@@ -1,0 +1,24 @@
+<svg width="80" height="80" viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="wai">
+  <defs>
+    <linearGradient id="waiGradient" x1="12" y1="10" x2="68" y2="70" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="0.52" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#818cf8"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#22d3ee" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="64" height="64" rx="20" fill="#07111c"/>
+  <rect x="9.5" y="9.5" width="61" height="61" rx="18.5" fill="none" stroke="url(#waiGradient)" stroke-width="3"/>
+  <path
+    d="M20 27l8.2 27L40 28l11.8 26L60 27"
+    fill="none"
+    stroke="url(#waiGradient)"
+    stroke-width="7"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    filter="url(#glow)"
+  />
+  <circle cx="61" cy="21" r="4" fill="#22d3ee"/>
+</svg>

@@ -1,0 +1,19 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 2%
+    patch:
+      default:
+        target: 50%
+
+flags:
+  backend:
+    paths:
+      - "src/wai/"
+    carryforward: true
+
+ignore:
+  - "ui/"
+  - "scripts/"
