@@ -196,7 +196,7 @@ async def sync_yaml_models(
 
     for mc in models:
         row = await db.fetchone(
-            "SELECT id, source FROM models WHERE name = ? AND deleted_at IS NULL",
+            "SELECT id, source, deleted_at FROM models WHERE name = ?",
             (mc.name,),
         )
         aliases = ",".join(mc.aliases)
@@ -245,7 +245,8 @@ async def sync_yaml_models(
             """UPDATE models SET provider = ?, model_type = ?, base_url = ?, max_context_tokens = ?,
                                   input_price_per_1m = ?, output_price_per_1m = ?, azure_deployment = ?,
                                   azure_api_version = ?, gcp_project = ?, gcp_location = ?, aliases = ?,
-                                  timeout = ?, strategy = ?, max_retries = ?, updated_at = CURRENT_TIMESTAMP
+                                  timeout = ?, strategy = ?, max_retries = ?, is_active = 1,
+                                  deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
                WHERE id = ?""",
             (
                 mc.provider,
@@ -283,6 +284,22 @@ async def sync_yaml_models(
                 (row["id"],),
             )
             logger.info("soft-deleted stale yaml model: %s", row["name"])
+    await db.commit()
+
+    org_rows = await db.fetchall(
+        "SELECT id FROM organizations WHERE deleted_at IS NULL"
+    )
+    for mc in models:
+        for org in org_rows:
+            granted = await db.fetchone(
+                "SELECT 1 FROM org_model_access WHERE org_id = ? AND model_name = ?",
+                (org["id"], mc.name),
+            )
+            if not granted:
+                await db.execute(
+                    "INSERT INTO org_model_access (id, org_id, model_name) VALUES (?, ?, ?)",
+                    (new_uuid(), org["id"], mc.name),
+                )
     await db.commit()
 
 

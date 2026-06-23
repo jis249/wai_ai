@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -15,7 +16,34 @@ from wai.health.mcp_checker import BUILTIN_WAI_ID, BUILTIN_WAI_TOOLS
 from wai.mcp.client import fetch_mcp_tools, probe_mcp_server
 from wai.security.url import validate_http_url
 
+from wai.mcp.legacy import RESERVED_MCP_ALIASES, is_legacy_mcp_alias
+
 router = APIRouter()
+
+
+def _validate_mcp_alias(alias: str) -> None:
+    normalized = alias.strip().lower()
+    if normalized in RESERVED_MCP_ALIASES:
+        raise bad_request(f'alias "{alias}" is reserved')
+
+
+def _drop_legacy_mcp_servers(servers: list[MCPServerResponse]) -> list[MCPServerResponse]:
+    return [server for server in servers if not is_legacy_mcp_alias(server.alias)]
+
+
+async def purge_legacy_mcp_servers(db, log: logging.Logger | None = None) -> None:
+    logger = log or logging.getLogger("wai.mcp")
+    rows = await db.fetchall(
+        "SELECT id, alias, name FROM mcp_servers WHERE deleted_at IS NULL AND lower(alias) IN ('voidllm')"
+    )
+    for row in rows:
+        await db.execute(
+            "UPDATE mcp_servers SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (row["id"],),
+        )
+        logger.info("removed legacy MCP server: %s (%s)", row["name"], row["alias"])
+    if rows:
+        await db.commit()
 
 
 class CreateMCPServerRequest(BaseModel):
@@ -88,6 +116,7 @@ def _builtin_wai_server() -> MCPServerResponse:
 
 
 def _with_builtin(servers: list[MCPServerResponse]) -> list[MCPServerResponse]:
+    servers = _drop_legacy_mcp_servers(servers)
     if any(s.alias == "wai" and s.source == "builtin" for s in servers):
         return servers
     return [_builtin_wai_server(), *servers]
@@ -187,7 +216,11 @@ async def list_mcp_server_health(_: KeyInfo = Depends(require_role(ROLE_MEMBER))
     h = get_handler()
     if h.mcp_health_checker is not None:
         raw = h.mcp_health_checker.get_all_health()
-        return [MCPServerHealthResponse(**item) if isinstance(item, dict) else item for item in raw]
+        return [
+            MCPServerHealthResponse(**item) if isinstance(item, dict) else item
+            for item in raw
+            if not is_legacy_mcp_alias((item.get("alias") if isinstance(item, dict) else getattr(item, "alias", "")) or "")
+        ]
     # No background health probes — derive status from cached tool counts.
     rows = await h.db.fetchall(
         "SELECT id, name, alias FROM mcp_servers WHERE deleted_at IS NULL ORDER BY alias"
@@ -195,6 +228,8 @@ async def list_mcp_server_health(_: KeyInfo = Depends(require_role(ROLE_MEMBER))
     now = utc_now_iso()
     health = []
     for r in rows:
+        if is_legacy_mcp_alias(r["alias"]):
+            continue
         tool_count = await _tool_count(h, r["id"])
         health.append(
             MCPServerHealthResponse(
@@ -229,6 +264,7 @@ async def create_mcp_server(
     _: KeyInfo = Depends(require_role(ROLE_SYSTEM_ADMIN)),
 ) -> MCPServerResponse:
     h = get_handler()
+    _validate_mcp_alias(body.alias)
     sid = new_uuid()
     url = _validate_mcp_url(body.url)
     token_enc = _encrypt_auth_token(h, sid, body.auth_type, body.auth_token)
@@ -258,6 +294,7 @@ async def create_org_mcp_server(
     _: KeyInfo = Depends(require_role(ROLE_ORG_ADMIN)),
 ) -> MCPServerResponse:
     h = get_handler()
+    _validate_mcp_alias(body.alias)
     sid = new_uuid()
     url = _validate_mcp_url(body.url)
     token_enc = _encrypt_auth_token(h, sid, body.auth_type, body.auth_token)
@@ -298,6 +335,7 @@ async def create_team_mcp_server(
     _: KeyInfo = Depends(require_role(ROLE_TEAM_ADMIN)),
 ) -> MCPServerResponse:
     h = get_handler()
+    _validate_mcp_alias(body.alias)
     sid = new_uuid()
     url = _validate_mcp_url(body.url)
     token_enc = _encrypt_auth_token(h, sid, body.auth_type, body.auth_token)
@@ -348,6 +386,8 @@ async def update_mcp_server(
     auth_token = fields.pop("auth_token", None)
     if "url" in fields:
         fields["url"] = _validate_mcp_url(fields["url"])
+    if "alias" in fields:
+        _validate_mcp_alias(fields["alias"])
     if "code_mode_enabled" in fields:
         fields["code_mode_enabled"] = 1 if fields["code_mode_enabled"] else 0
     if auth_token is not None:

@@ -15,6 +15,7 @@ from wai.api.admin.common import (
     not_found,
 )
 from wai.api.admin.handler import get_handler, require_role
+from wai.mcp.legacy import is_legacy_mcp_alias
 from wai.api.admin import repository as repo
 
 router = APIRouter()
@@ -149,4 +150,4 @@ async def list_available_global_mcp_servers(
         rows = await h.db.fetchall(
             "SELECT id, alias, name FROM mcp_servers WHERE org_id IS NULL AND team_id IS NULL AND is_active = 1"
         )
-    return {"servers": [dict(r) for r in rows]}
+    return {"servers": [dict(r) for r in rows if not is_legacy_mcp_alias(r["alias"])]}

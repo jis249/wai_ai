@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import platform
@@ -92,14 +94,51 @@ def _safe_config() -> dict[str, str]:
     return {k: v for k in keys if (v := os.environ.get(k))}
 
 
+def _apply_nvidia_smi(resp: SystemUsageResponse) -> None:
+    try:
+        out = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            timeout=3,
+        )
+    except Exception:
+        return
+
+    reader = csv.reader(io.StringIO(out.decode()))
+    for record in reader:
+        if len(record) < 2:
+            continue
+        name = record[0].strip()
+        try:
+            total_mib = int(record[1].strip())
+        except ValueError:
+            continue
+        if not name or total_mib <= 0:
+            continue
+        memory_bytes = total_mib * 1024 * 1024
+        for gpu in resp.gpu:
+            if gpu.name.lower() == name.lower():
+                gpu.memory_bytes = memory_bytes
+                break
+        else:
+            resp.gpu.append(SystemDeviceInfo(name=name, memory_bytes=memory_bytes))
+
+
 def _collect_windows(resp: SystemUsageResponse) -> None:
     script = (
         "$os = Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,OSArchitecture,"
         "TotalVisibleMemorySize,FreePhysicalMemory; "
         "$cpu = @(Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors); "
+        "$gpu = @(Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM); "
+        "$npu = @(Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match "
+        "'NPU|Neural|AI Boost|VPU|Vision Processing' } | Select-Object Name); "
         "$storage = @(Get-CimInstance Win32_LogicalDisk -Filter \"DriveType=3\" | "
         "Select-Object DeviceID,VolumeName,FileSystem,Size,FreeSpace); "
-        "[pscustomobject]@{ os=$os; cpu=$cpu; storage=$storage } | ConvertTo-Json -Depth 5 -Compress"
+        "[pscustomobject]@{ os=$os; cpu=$cpu; gpu=$gpu; npu=$npu; storage=$storage } | "
+        "ConvertTo-Json -Depth 5 -Compress"
     )
     try:
         out = subprocess.check_output(
@@ -128,6 +167,24 @@ def _collect_windows(resp: SystemUsageResponse) -> None:
                 cores=int(c.get("NumberOfCores") or 0),
                 logical_processors=int(c.get("NumberOfLogicalProcessors") or 0),
             ))
+        gpus = snap.get("gpu") or []
+        if isinstance(gpus, dict):
+            gpus = [gpus]
+        for g in gpus:
+            name = g.get("Name") or ""
+            if not name:
+                continue
+            adapter_ram = g.get("AdapterRAM")
+            memory_bytes = int(adapter_ram) if adapter_ram is not None else 0
+            resp.gpu.append(SystemDeviceInfo(name=name, memory_bytes=memory_bytes))
+        _apply_nvidia_smi(resp)
+        npus = snap.get("npu") or []
+        if isinstance(npus, dict):
+            npus = [npus]
+        for n in npus:
+            name = n.get("Name") or ""
+            if name:
+                resp.npu.append(SystemDeviceInfo(name=name))
         disks = snap.get("storage") or []
         if isinstance(disks, dict):
             disks = [disks]

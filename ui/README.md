@@ -26,7 +26,7 @@ npm ci
 npm run dev
 ```
 
-The dev server runs on `http://localhost:5173` and proxies API requests to the WAI backend (default `http://localhost:8090`). Start the backend with:
+The dev server runs on `http://localhost:8081` and proxies API requests to the WAI backend (default `http://localhost:8090`). Start the backend with:
 
 ```powershell
 ..\run-local.ps1 -BackendOnly

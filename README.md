@@ -2,28 +2,35 @@
 
 Privacy-first LLM proxy and AI gateway — Python backend with OpenAI-compatible `/v1/*` API, admin dashboard, RBAC, MCP gateway, and usage tracking.
 
-## Quick start
+## Production (IIS on Windows)
+
+Requires local **PostgreSQL**, **IIS** with URL Rewrite + ARR, and secrets in `.env.local`.
 
 ```powershell
-# Start PostgreSQL (Docker)
-docker compose up -d postgres
-
-# Install Python dependencies
+# One-time / after updates (run as Administrator)
+Copy-Item wai.yaml.example wai.yaml
 python -m venv .venv
 .\.venv\Scripts\pip install -e .
-
-# Configure secrets in .env.local (WAI_ADMIN_KEY, WAI_ENCRYPTION_KEY, POSTGRES_PASSWORD, provider keys)
-Copy-Item wai.yaml.example wai.yaml
-
-# Run backend + dev UI
-.\run-local.ps1
+.\run-iis-local.ps1
 ```
 
-Or backend only:
+This will:
+
+- Start the Python backend on **http://localhost:8090**
+- Build and deploy the UI to **C:\inetpub\wai**
+- Configure IIS site **wai** on **http://localhost:8081**
+- Install a scheduled task to keep the backend and IIS site running
+
+| URL | Role |
+|-----|------|
+| http://localhost:8081 | Dashboard (IIS) |
+| http://localhost:8090 | Backend API (internal) |
+
+## Local development
 
 ```powershell
-$env:WAI_DEV = "true"
-python -m wai --config wai.yaml
+.\run-local.ps1 -DevUi          # backend + Vite on http://127.0.0.1:5173
+.\run-local.ps1 -BackendOnly    # backend in foreground
 ```
 
 ## Configuration
@@ -46,50 +53,26 @@ python -m wai --config wai.yaml
 
 ```
 .
-├── pyproject.toml          # Python package metadata
-├── docker-compose.yml      # Local PostgreSQL (+ optional Ollama)
-├── wai.yaml.example        # Config template → copy to wai.yaml
-├── run-local.ps1           # Local dev orchestration
+├── pyproject.toml
+├── wai.yaml.example
+├── run-iis-local.ps1       # IIS deploy + autostart (production)
+├── run-local.ps1           # Local dev helpers
 ├── scripts/
-│   ├── db/                 # Database helpers (migrate, ensure DB, reset admin)
-│   └── dev/                # Dev utilities (MCP test, Ollama GPU restart)
-├── src/wai/                # Python backend
-│   ├── api/                # Admin + health HTTP routes
-│   ├── auth/               # Bootstrap and auth helpers
-│   ├── config/             # YAML config loader
-│   ├── crypto/             # AES encryption for secrets at rest
-│   ├── db/                 # PostgreSQL connection + migrations
-│   ├── middleware/         # Request ID and HTTP middleware
-│   ├── proxy/              # OpenAI-compatible LLM proxy
-│   ├── app.py              # FastAPI application factory
-│   └── cli.py              # `wai` CLI entry point
-└── ui/                     # React admin dashboard
-    ├── public/             # Static assets
-    └── src/                # Pages, hooks, components
+│   ├── setup-iis-wai.ps1
+│   ├── install-wai-autostart.ps1
+│   ├── ensure-wai-running.ps1
+│   ├── wai-backend.ps1
+│   └── db/
+├── src/wai/
+└── ui/
 ```
 
 ## Database
 
-WAI uses **PostgreSQL** locally.
-
-| Setting | Value |
-|---------|-------|
-| Host | `localhost:5432` |
-| Database | `wai` |
-| User | `postgres` |
-| Password | `POSTGRES_PASSWORD` in `.env.local` |
-
-Start PostgreSQL:
-
-```powershell
-docker compose up -d postgres
-.\run-local.ps1
-```
-
-The script creates the `wai` database automatically if it does not exist.
+WAI uses **PostgreSQL** on the local Windows service (`127.0.0.1:5432`, database `wai`).
 
 Run migrations manually:
 
 ```powershell
-python scripts/db/migrate.py
+.\.venv\Scripts\python.exe scripts\db\migrate.py
 ```

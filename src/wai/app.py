@@ -83,6 +83,10 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
         )
         await run_migrations(db, logger)
 
+        from wai.api.admin.mcp_servers import purge_legacy_mcp_servers
+
+        await purge_legacy_mcp_servers(db, logger)
+
         enc_key = parse_key(cfg.settings.encryption_key)
         await sync_yaml_models(db, cfg.models, enc_key, logger)
         await load_db_into_registry(db, registry, enc_key, logger)
@@ -260,6 +264,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
 <pre>cd ui && npm ci && npm run build</pre>
 <p>Then restart the server and open <a href="/login">/login</a></p>
 <p>Or use Vite dev UI: <a href="http://127.0.0.1:5173/login">http://127.0.0.1:5173/login</a></p>
+<p>Or IIS frontend: <a href="http://127.0.0.1:8081/login">http://127.0.0.1:8081/login</a></p>
 </body></html>"""
                 )
 

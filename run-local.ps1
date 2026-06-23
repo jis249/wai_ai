@@ -10,6 +10,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "scripts\wai-env.ps1")
+
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DataDir = Join-Path $Root "data"
 $EnvFile = Join-Path $Root ".env.local"
@@ -97,32 +99,6 @@ function Test-PostgresPort {
     }
 }
 
-function Start-DockerPostgres {
-    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-        return $false
-    }
-
-    $compose = Join-Path $Root "docker-compose.yml"
-    if (-not (Test-Path $compose)) {
-        return $false
-    }
-
-    Write-Host "Starting PostgreSQL via Docker Compose..."
-    docker compose -f $compose up -d postgres | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        return $false
-    }
-
-    for ($i = 0; $i -lt 30; $i++) {
-        Start-Sleep -Seconds 1
-        if (Test-PostgresPort) {
-            return $true
-        }
-    }
-
-    return $false
-}
-
 function Ensure-PostgresDatabase {
     param(
         [string]$User,
@@ -131,17 +107,15 @@ function Ensure-PostgresDatabase {
     )
 
     if (-not (Test-PostgresPort)) {
-        if (-not (Start-DockerPostgres)) {
-            throw "PostgreSQL is not accepting connections on localhost:5432. Start PostgreSQL or run: docker compose up -d postgres"
-        }
+        throw "PostgreSQL is not accepting connections on 127.0.0.1:5432. Start the PostgreSQL Windows service."
     }
 
     $psql = Get-PostgresTool "psql.exe"
     $env:PGPASSWORD = $Password
-    $exists = & $psql -h localhost -p 5432 -U $User -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DbName'"
+    $exists = & $psql -h 127.0.0.1 -p 5432 -U $User -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DbName'"
     if ($exists -ne "1") {
         Write-Host "Creating PostgreSQL database '$DbName'..."
-        & $psql -h localhost -p 5432 -U $User -d postgres -c "CREATE DATABASE $DbName;"
+        & $psql -h 127.0.0.1 -p 5432 -U $User -d postgres -c "CREATE DATABASE $DbName;"
     }
 }
 
@@ -167,55 +141,9 @@ function Get-ProxyPort {
 }
 
 function Start-BackendDetached {
-    param(
-        [int]$Port = 8090,
-        [string]$LogName = "wai-backend.log",
-        [string]$ErrorLogName = "wai-backend.err.log"
-    )
+    param([int]$Port = 8090)
 
-    $backend = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-    if ($backend) {
-        Write-Host "wai backend already running on http://localhost:$Port"
-        return
-    }
-
-    $backendLog = Join-Path $DataDir $LogName
-    $backendErr = Join-Path $DataDir $ErrorLogName
-    $env:WAI_DEV = "true"
-    $backendProcess = Start-Process -FilePath $VenvPython `
-        -ArgumentList @("-m", "wai", "--config", $Config, "--host", "0.0.0.0", "--port", "$Port") `
-        -WorkingDirectory $Root `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $backendLog `
-        -RedirectStandardError $backendErr `
-        -PassThru
-
-    for ($i = 0; $i -lt 60; $i++) {
-        Start-Sleep -Seconds 1
-        $backend = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-        if ($backend) {
-            break
-        }
-
-        if ($backendProcess.HasExited) {
-            $message = "wai backend exited before it started listening on port $Port."
-            if (Test-Path $backendErr) {
-                $errorText = Get-Content -Path $backendErr -Raw
-                if (-not [string]::IsNullOrWhiteSpace($errorText)) {
-                    $message = "$message`n$errorText"
-                }
-            }
-            throw $message
-        }
-    }
-
-    if (-not $backend) {
-        throw "wai backend did not start on port $Port. Check $backendLog and $backendErr."
-    }
-
-    Write-Host "wai backend started on http://localhost:$Port"
-    Write-Host "Backend process id: $($backendProcess.Id)"
-    Write-Host "Backend logs: $backendLog"
+    & (Join-Path $Root "scripts\wai-backend.ps1") -Detached
 }
 
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
@@ -242,7 +170,7 @@ $envValues.GetEnumerator() |
     Set-Content -Path $EnvFile -Encoding ASCII
 
 foreach ($entry in $envValues.GetEnumerator()) {
-    Set-Item -Path "Env:$($entry.Name)" -Value $entry.Value
+    [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
 }
 
 if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
@@ -292,35 +220,20 @@ if ($BackendOnly) {
 
 Start-BackendDetached -Port $Port
 
-if (-not (Test-Path (Join-Path $UiDir "node_modules"))) {
-    Push-Location $UiDir
-    try {
-        npm ci
-    } finally {
-        Pop-Location
-    }
-}
-
-if (-not (Test-Path (Join-Path $UiDir "dist\index.html"))) {
-    Write-Host "Building wai UI..."
-    Push-Location $UiDir
-    try {
-        npm run build
-    } finally {
-        Pop-Location
-    }
-}
-
-Write-Host "WAI dashboard: http://localhost:$Port"
-Write-Host "Database: PostgreSQL localhost:5432/$DatabaseName"
+Write-Host "WAI backend: http://localhost:$Port"
+Write-Host "WAI frontend (IIS): http://localhost:8081"
+Write-Host "Database: PostgreSQL 127.0.0.1:5432/$DatabaseName"
+Write-Host ""
+Write-Host "Deploy or refresh IIS with: .\run-iis-local.ps1"
+Write-Host "Dev UI with hot reload:   .\run-local.ps1 -DevUi"
 
 if (-not $DevUi) {
-    Write-Host "Backend running in background. Use -DevUi for Vite hot-reload on port 5173."
     exit 0
 }
 
 Write-Host "WAI dev UI: http://127.0.0.1:5173"
 Write-Host "Backend API: http://localhost:$Port"
+Write-Host "IIS frontend: http://localhost:8081 (run .\run-iis-local.ps1 as Admin)"
 Push-Location $UiDir
 try {
     npm run dev -- --host 127.0.0.1

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from wai.db.connection import Database
+from wai.mcp.legacy import is_legacy_mcp_alias
 from wai.mcp.client import fetch_mcp_tools, probe_mcp_server
 
 BUILTIN_WAI_ID = "00000000-0000-7000-8000-000000000001"
@@ -56,7 +57,10 @@ class MCPHealthChecker:
                 pass
 
     def get_all_health(self) -> list[dict[str, Any]]:
-        return list(self._health.values())
+        return [
+            item for item in self._health.values()
+            if not is_legacy_mcp_alias(item.get("alias", ""))
+        ]
 
     async def _loop(self) -> None:
         while not self._stop.is_set():
@@ -80,6 +84,8 @@ class MCPHealthChecker:
         )
         for row in rows:
             item = dict(row)
+            if is_legacy_mcp_alias(item.get("alias", "")):
+                continue
             try:
                 self._health[item["id"]] = await self._probe_server(item)
             except Exception as exc:
