@@ -18,8 +18,12 @@ _USAGE_EVENT_SQL = """INSERT INTO usage_events (
        id, request_id, key_id, key_type, org_id, team_id, user_id,
        service_account_id, model_name, requested_model_name,
        prompt_tokens, completion_tokens, total_tokens, cost_estimate,
-       request_duration_ms, ttft_ms, tokens_per_second, status_code
-   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+       request_duration_ms, ttft_ms, tokens_per_second, status_code, created_at
+   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
 def _truncate(value: str) -> str:
@@ -129,6 +133,7 @@ class UsageLogger:
         try:
             async with self._db.transaction() as tx:
                 event_rows: list[tuple] = []
+                created_at = _utc_now_iso()
                 for ev in batch:
                     event_rows.append(
                         (
@@ -150,6 +155,7 @@ class UsageLogger:
                             ev.ttft_ms,
                             ev.tokens_per_second,
                             ev.status_code,
+                            created_at,
                         )
                     )
                     bucket = _bucket_hour()

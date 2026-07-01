@@ -13,6 +13,7 @@ import { StatCard } from '../components/ui/StatCard'
 import TabSwitcher from '../components/ui/TabSwitcher'
 import {
   useModels,
+  useAccessibleModels,
   useCreateModel,
   useUpdateModel,
   useDeleteModel,
@@ -1438,7 +1439,7 @@ function EditModelDialog({ model, onClose }: EditModelDialogProps) {
 // ModelsPage
 // ---------------------------------------------------------------------------
 
-export default function ModelsPage() {
+export default function ModelsPage({ readOnly = false }: { readOnly?: boolean }) {
   const [detailModel, setDetailModel] = useState<ModelResponse | null>(null)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [editModel, setEditModel] = useState<ModelResponse | null>(null)
@@ -1447,7 +1448,9 @@ export default function ModelsPage() {
   const [editDeployment, setEditDeployment] = useState<{ modelId: string; deployment: DeploymentResponse | null } | null>(null)
   const [deleteDeployment, setDeleteDeployment] = useState<{ modelId: string; deploymentId: string } | null>(null)
 
-  const { data: models, isLoading } = useModels()
+  const adminModels = useModels()
+  const accessibleModels = useAccessibleModels(readOnly)
+  const { data: models, isLoading } = readOnly ? accessibleModels : adminModels
   const { data: healthData } = useModelHealth()
   const deleteModel = useDeleteModel()
   const toggleModel = useToggleModel()
@@ -1467,7 +1470,8 @@ export default function ModelsPage() {
     return map
   }, [healthData])
 
-  const columns: Column<ModelResponse>[] = [
+  const columns: Column<ModelResponse>[] = useMemo(() => {
+    const base: Column<ModelResponse>[] = [
     {
       key: 'name',
       header: 'Name',
@@ -1549,6 +1553,38 @@ export default function ModelsPage() {
           <span className="text-text-tertiary">—</span>
         ),
     },
+    ]
+
+    if (readOnly) {
+      base.push({
+        key: 'is_active',
+        header: 'Status',
+        render: (row) => (
+          <Badge variant={row.is_active ? 'success' : 'muted'}>
+            {row.is_active ? 'Active' : 'Inactive'}
+          </Badge>
+        ),
+      })
+      base.push({
+        key: 'actions',
+        header: '',
+        align: 'right',
+        render: (row) => (
+          <button
+            type="button"
+            onClick={() => setDetailModel(row)}
+            title="View details"
+            className="p-1.5 rounded-md text-text-tertiary hover:text-accent hover:bg-accent/10 transition-colors"
+          >
+            <IconEye />
+          </button>
+        ),
+      })
+      return base
+    }
+
+    return [
+      ...base,
     {
       key: 'source',
       header: 'Source',
@@ -1636,7 +1672,8 @@ export default function ModelsPage() {
         </div>
       ),
     },
-  ]
+    ]
+  }, [readOnly, healthByName, toggleModel, deleteModel, deleteModelId, toast])
 
   function handleDelete() {
     if (!deleteModelId) return
@@ -1679,20 +1716,24 @@ export default function ModelsPage() {
     <>
       <PageHeader
         title="Models"
-        description="System model registry"
+        description={readOnly ? 'Models available to your account (read-only)' : 'System model registry'}
         actions={
-          <Button onClick={() => setShowCreateDialog(true)}>Add Model</Button>
+          readOnly ? undefined : (
+            <Button onClick={() => setShowCreateDialog(true)}>Add Model</Button>
+          )
         }
       />
 
       {/* Stat cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+      <div className={`grid grid-cols-1 ${readOnly ? 'sm:grid-cols-1' : 'sm:grid-cols-3'} gap-4 mb-6`}>
         <StatCard
-          label="Total Models"
+          label={readOnly ? 'Available Models' : 'Total Models'}
           value={isLoading ? '—' : allModels.length}
           icon={<IconLayers />}
           iconColor="purple"
         />
+        {!readOnly && (
+          <>
         <StatCard
           label="Active"
           value={isLoading ? '—' : activeCount}
@@ -1705,6 +1746,8 @@ export default function ModelsPage() {
           icon={<IconPauseCircle />}
           iconColor="yellow"
         />
+          </>
+        )}
       </div>
 
       <Table<ModelResponse>
@@ -1712,9 +1755,9 @@ export default function ModelsPage() {
         data={allModels}
         keyExtractor={(row) => row.id}
         loading={isLoading}
-        emptyMessage="No models configured"
-        expandedKeys={expandedModels}
-        onToggleExpand={(key) => {
+        emptyMessage={readOnly ? 'No models are available to your account' : 'No models configured'}
+        expandedKeys={readOnly ? undefined : expandedModels}
+        onToggleExpand={readOnly ? undefined : (key) => {
           setExpandedModels((prev) => {
             const next = new Set(prev)
             if (next.has(key)) next.delete(key)
@@ -1722,7 +1765,7 @@ export default function ModelsPage() {
             return next
           })
         }}
-        renderExpandedRow={(row) => {
+        renderExpandedRow={readOnly ? undefined : (row) => {
           if (!row.deployments?.length) return null
           const isApi = row.source === 'api'
           return (
@@ -1810,9 +1853,12 @@ export default function ModelsPage() {
         model={detailModel}
         healthByName={healthByName}
         onClose={() => setDetailModel(null)}
-        onEdit={setEditModel}
+        onEdit={readOnly ? undefined : setEditModel}
+        readOnly={readOnly}
       />
 
+      {!readOnly && (
+      <>
       <CreateModelDialog
         open={showCreateDialog}
         onClose={() => setShowCreateDialog(false)}
@@ -1852,6 +1898,8 @@ export default function ModelsPage() {
         confirmLabel="Delete"
         loading={deleteDeploymentMutation.isPending}
       />
+      </>
+      )}
     </>
   )
 }

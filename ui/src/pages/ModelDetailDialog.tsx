@@ -197,20 +197,21 @@ export interface ModelDetailDialogProps {
   healthByName: Map<string, ModelHealthInfo>
   onClose: () => void
   onEdit?: (model: ModelResponse) => void
+  readOnly?: boolean
 }
 
-export function ModelDetailDialog({ model, healthByName, onClose, onEdit }: ModelDetailDialogProps) {
+export function ModelDetailDialog({ model, healthByName, onClose, onEdit, readOnly = false }: ModelDetailDialogProps) {
   const nowIso = useMemo(() => new Date().toISOString(), [model?.id])
   const from24h = useMemo(() => new Date(Date.now() - 86_400_000).toISOString(), [model?.id])
   const from7d = useMemo(() => new Date(Date.now() - 7 * 86_400_000).toISOString(), [model?.id])
 
   const { data: usage24hData, isLoading: usage24hLoading } = useCrossOrgUsage(
     { from: from24h, to: nowIso, groupBy: 'model' },
-    model != null,
+    model != null && !readOnly,
   )
   const { data: usage7dData, isLoading: usage7dLoading } = useCrossOrgUsage(
     { from: from7d, to: nowIso, groupBy: 'model' },
-    model != null,
+    model != null && !readOnly,
   )
 
   if (!model) return null
@@ -220,7 +221,7 @@ export function ModelDetailDialog({ model, healthByName, onClose, onEdit }: Mode
   const providerKey = isKnownProvider(model.provider) ? model.provider : 'custom'
   const usage24h = usage24hData?.data.find((d) => d.group_key === model.name)
   const usage7d = usage7dData?.data.find((d) => d.group_key === model.name)
-  const canEdit = model.source === 'api'
+  const canEdit = !readOnly && model.source === 'api'
 
   return (
     <Dialog
@@ -254,7 +255,7 @@ export function ModelDetailDialog({ model, healthByName, onClose, onEdit }: Mode
             {providerLabels[providerKey]}
           </Badge>
           <Badge variant="info">{typeLabels[model.type] ?? model.type}</Badge>
-          <Badge variant={model.source === 'yaml' ? 'muted' : 'default'}>{model.source}</Badge>
+          {!readOnly && <Badge variant={model.source === 'yaml' ? 'muted' : 'default'}>{model.source}</Badge>}
           <div className="flex items-center gap-2 ml-1">
             <span className={cn('w-2 h-2 rounded-full', healthCfg.dotClass)} />
             <Badge variant={healthCfg.badge}>{healthCfg.label}</Badge>
@@ -297,6 +298,7 @@ export function ModelDetailDialog({ model, healthByName, onClose, onEdit }: Mode
           </dl>
         </section>
 
+        {!readOnly && (
         <section>
           <h3 className="text-sm font-semibold text-text-secondary mb-3">Usage</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -324,12 +326,13 @@ export function ModelDetailDialog({ model, healthByName, onClose, onEdit }: Mode
             )}
           </div>
         </section>
+        )}
 
         <section>
           <h3 className="text-sm font-semibold text-text-secondary mb-3">Configuration</h3>
           <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <DetailItem label="Model ID" value={model.id} mono />
-            <DetailItem label="Base URL" value={model.base_url} mono />
+            {!readOnly && <DetailItem label="Model ID" value={model.id} mono />}
+            {!readOnly && <DetailItem label="Base URL" value={model.base_url} mono />}
             <DetailItem
               label="Context Window"
               value={model.max_context_tokens > 0 ? formatNumber(model.max_context_tokens) : '—'}
@@ -342,11 +345,11 @@ export function ModelDetailDialog({ model, healthByName, onClose, onEdit }: Mode
               label="Output Price / 1M"
               value={model.output_price_per_1m > 0 ? formatCost(model.output_price_per_1m) : '—'}
             />
-            <DetailItem label="Timeout" value={model.timeout || '—'} />
-            <DetailItem label="Azure Deployment" value={model.azure_deployment || '—'} mono />
-            <DetailItem label="Azure API Version" value={model.azure_api_version || '—'} mono />
+            {!readOnly && <DetailItem label="Timeout" value={model.timeout || '—'} />}
+            {!readOnly && <DetailItem label="Azure Deployment" value={model.azure_deployment || '—'} mono />}
+            {!readOnly && <DetailItem label="Azure API Version" value={model.azure_api_version || '—'} mono />}
             <DetailItem label="Load Strategy" value={model.strategy || '—'} />
-            <DetailItem label="Max Retries" value={model.max_retries != null ? String(model.max_retries) : '—'} />
+            {!readOnly && <DetailItem label="Max Retries" value={model.max_retries != null ? String(model.max_retries) : '—'} />}
             <DetailItem
               label="Aliases"
               value={
@@ -359,12 +362,12 @@ export function ModelDetailDialog({ model, healthByName, onClose, onEdit }: Mode
                 ) : '—'
               }
             />
-            <DetailItem label="Created" value={formatDate(model.created_at)} />
-            <DetailItem label="Updated" value={formatDate(model.updated_at)} />
+            {!readOnly && <DetailItem label="Created" value={formatDate(model.created_at)} />}
+            {!readOnly && <DetailItem label="Updated" value={formatDate(model.updated_at)} />}
           </dl>
         </section>
 
-        {model.deployments && model.deployments.length > 0 && (
+        {!readOnly && model.deployments && model.deployments.length > 0 && (
           <section>
             <h3 className="text-sm font-semibold text-text-secondary mb-3">
               Deployments ({model.deployments.length})

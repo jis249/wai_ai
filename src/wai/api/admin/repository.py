@@ -1000,15 +1000,18 @@ async def get_scoped_usage_aggregates(
     db: Database, org_id: str, team_id: str, user_id: str,
     from_iso: str, to_iso: str, group_by: str,
 ) -> list[dict[str, Any]]:
+    # Query usage_hourly (not usage_events): hourly buckets use ISO timestamps that
+    # match API from/to bounds. usage_events.created_at is SQLite CURRENT_TIMESTAMP
+    # ("YYYY-MM-DD HH:MM:SS") and string-compares incorrectly against ISO bounds.
     group_col = {
         "model": "model_name",
         "team": "team_id",
         "key": "key_id",
         "user": "user_id",
-        "day": "LEFT(created_at, 10)",
-        "hour": "LEFT(created_at, 13) || ':00:00+00:00'",
+        "day": "LEFT(bucket_hour, 10)",
+        "hour": "bucket_hour",
     }.get(group_by, "model_name")
-    clauses = ["org_id = ?", "created_at >= ?", "created_at < ?"]
+    clauses = ["org_id = ?", "bucket_hour >= ?", "bucket_hour < ?"]
     params: list[Any] = [org_id, from_iso, to_iso]
     if team_id:
         clauses.append("team_id = ?")
@@ -1019,13 +1022,14 @@ async def get_scoped_usage_aggregates(
     where = " AND ".join(clauses)
     rows = await db.fetchall(
         f"""SELECT {group_col} AS group_key,
-                   COUNT(*) AS total_requests,
+                   COALESCE(SUM(request_count), 0) AS total_requests,
                    COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
                    COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                   COALESCE(SUM(cost_estimate), 0) AS cost_estimate,
-                   COALESCE(AVG(request_duration_ms), 0) AS avg_duration_ms
-            FROM usage_events WHERE {where}
+                   COALESCE(SUM(cost_sum), 0) AS cost_estimate,
+                   COALESCE(SUM(duration_sum_ms) / NULLIF(SUM(request_count), 0), 0)
+                       AS avg_duration_ms
+            FROM usage_hourly WHERE {where}
             GROUP BY {group_col} ORDER BY group_key""",
         tuple(params),
     )
@@ -1037,8 +1041,8 @@ async def get_monthly_token_usage(db: Database, org_id: str) -> int:
         day=1, hour=0, minute=0, second=0, microsecond=0,
     ).strftime("%Y-%m-%dT%H:%M:%S+00:00")
     row = await db.fetchone(
-        """SELECT COALESCE(SUM(total_tokens), 0) AS t FROM usage_events
-           WHERE org_id = ? AND created_at >= ?""",
+        """SELECT COALESCE(SUM(total_tokens), 0) AS t FROM usage_hourly
+           WHERE org_id = ? AND bucket_hour >= ?""",
         (org_id, start),
     )
     return int(row["t"]) if row else 0
@@ -1085,3 +1089,25 @@ async def list_audit_logs(db: Database, filters: dict[str, Any], limit: int) -> 
     if has_more:
         rows = rows[:limit]
     return [dict(r) for r in rows], has_more
+
+
+async def enrich_audit_log_actors(db: Database, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    user_ids = list({
+        e["actor_id"] for e in events
+        if e.get("actor_type") == "user" and e.get("actor_id")
+    })
+    if not user_ids:
+        return events
+    placeholders = ",".join("?" * len(user_ids))
+    rows = await db.fetchall(
+        f"""SELECT id, email, display_name FROM users
+            WHERE id IN ({placeholders}) AND deleted_at IS NULL""",
+        tuple(user_ids),
+    )
+    users = {row["id"]: row for row in rows}
+    for event in events:
+        user = users.get(event.get("actor_id") or "")
+        if user:
+            event["actor_email"] = user["email"]
+            event["actor_display_name"] = user["display_name"] or user["email"]
+    return events

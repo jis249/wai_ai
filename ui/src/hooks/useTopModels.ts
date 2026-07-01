@@ -19,17 +19,14 @@ interface UsageResponse {
   data: UsageDataPoint[]
 }
 
-export function useTopModels(orgId: string, enabled = true) {
+export function useTopModels(orgId: string, from: string, to: string, enabled = true) {
   return useQuery({
-    queryKey: ['top-models', orgId],
-    queryFn: () => {
-      const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-      const to = new Date().toISOString()
-      return apiClient<UsageResponse>(
+    queryKey: ['top-models', orgId, from, to],
+    queryFn: () =>
+      apiClient<UsageResponse>(
         `/orgs/${orgId}/usage?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&group_by=model`,
-      )
-    },
-    enabled: !!orgId && enabled,
+      ),
+    enabled: !!orgId && !!from && !!to && enabled,
     staleTime: 30_000,
     refetchInterval: 60_000,
   })

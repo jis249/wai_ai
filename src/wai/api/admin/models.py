@@ -99,6 +99,24 @@ class PaginatedModelsResponse(BaseModel):
     next_cursor: str | None = None
 
 
+class AccessibleModelResponse(BaseModel):
+    id: str
+    name: str
+    provider: str
+    type: str
+    max_context_tokens: int
+    input_price_per_1m: float = 0
+    output_price_per_1m: float = 0
+    is_active: bool
+    aliases: list[str] = Field(default_factory=list)
+    strategy: str = ""
+    fallback_model_name: str = ""
+
+
+class AccessibleModelsListResponse(BaseModel):
+    data: list[AccessibleModelResponse]
+
+
 class TestConnectionRequest(BaseModel):
     provider: str
     base_url: str
@@ -144,6 +162,24 @@ def _model_resp(row: dict[str, Any]) -> ModelResponse:
     )
 
 
+def _accessible_model_resp(row: dict[str, Any]) -> AccessibleModelResponse:
+    aliases = row.get("aliases", "") or ""
+    alias_list = [a.strip() for a in aliases.split(",") if a.strip()] if aliases else []
+    return AccessibleModelResponse(
+        id=row["id"],
+        name=row["name"],
+        provider=row["provider"],
+        type=row.get("model_type") or row.get("type") or "chat",
+        max_context_tokens=int(row.get("max_context_tokens") or 0),
+        input_price_per_1m=float(row.get("input_price_per_1m") or 0),
+        output_price_per_1m=float(row.get("output_price_per_1m") or 0),
+        is_active=bool(row.get("is_active", 1)),
+        aliases=alias_list,
+        strategy=row.get("strategy") or "",
+        fallback_model_name=row.get("fallback_model_name") or "",
+    )
+
+
 async def _fetch_model(h, model_id: str) -> dict[str, Any]:
     row = await h.db.fetchone(
         "SELECT * FROM models WHERE id = ? AND deleted_at IS NULL", (model_id,)
@@ -159,6 +195,23 @@ async def get_model_health(_: KeyInfo = Depends(require_role(ROLE_MEMBER))) -> M
     if h.health_checker is None:
         return ModelHealthResponse(models=[])
     return ModelHealthResponse(models=h.health_checker.get_all_health())
+
+
+@router.get("/me/models", response_model=AccessibleModelsListResponse)
+async def list_accessible_models(
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+) -> AccessibleModelsListResponse:
+    """Read-only list of active models the current key may use."""
+    h = get_handler()
+    rows = await h.db.fetchall(
+        "SELECT * FROM models WHERE deleted_at IS NULL AND is_active = 1 ORDER BY name"
+    )
+    models: list[AccessibleModelResponse] = []
+    for row in rows:
+        name = row["name"]
+        if h.access_cache.check(key_info.org_id, key_info.team_id, key_info.id, name):
+            models.append(_accessible_model_resp(dict(row)))
+    return AccessibleModelsListResponse(data=models)
 
 
 @router.post("/models/test-connection", response_model=TestConnectionResponse)

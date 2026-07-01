@@ -110,6 +110,54 @@ export function useModels(cursor?: string) {
   })
 }
 
+export interface AccessibleModel {
+  id: string
+  name: string
+  type: string
+  provider: string
+  max_context_tokens: number
+  input_price_per_1m: number
+  output_price_per_1m: number
+  is_active: boolean
+  aliases: string[]
+  strategy?: string
+  fallback_model_name?: string
+}
+
+function accessibleToModelResponse(model: AccessibleModel): ModelResponse {
+  return {
+    id: model.id,
+    name: model.name,
+    type: model.type,
+    provider: model.provider,
+    base_url: '',
+    max_context_tokens: model.max_context_tokens,
+    input_price_per_1m: model.input_price_per_1m,
+    output_price_per_1m: model.output_price_per_1m,
+    is_active: model.is_active,
+    source: 'api',
+    aliases: model.aliases,
+    strategy: model.strategy ?? '',
+    fallback_model_name: model.fallback_model_name ?? '',
+    created_at: '',
+    updated_at: '',
+  }
+}
+
+export function useAccessibleModels(enabled = true) {
+  return useQuery({
+    queryKey: ['accessible-models-detail'],
+    queryFn: async () => {
+      const res = await apiClient<{ data: AccessibleModel[] }>('/me/models')
+      return {
+        data: res.data.map(accessibleToModelResponse),
+      }
+    },
+    enabled,
+    staleTime: 30_000,
+  })
+}
+
 export function useCreateModel() {
   const queryClient = useQueryClient()
   return useMutation({

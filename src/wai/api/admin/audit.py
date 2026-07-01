@@ -31,6 +31,8 @@ class AuditEventResponse(BaseModel):
     actor_id: str
     actor_type: str
     actor_key_id: str
+    actor_email: str = ""
+    actor_display_name: str = ""
     action: str
     resource_type: str
     resource_id: str
@@ -97,6 +99,7 @@ async def list_audit_logs(
         },
         limit,
     )
+    events = await repo.enrich_audit_log_actors(h.db, events)
     return AuditListResponse(
         data=[
             AuditEventResponse(
@@ -106,6 +109,8 @@ async def list_audit_logs(
                 actor_id=e.get("actor_id") or "",
                 actor_type=e.get("actor_type") or "",
                 actor_key_id=e.get("actor_key_id") or "",
+                actor_email=e.get("actor_email") or "",
+                actor_display_name=e.get("actor_display_name") or "",
                 action=e.get("action") or "",
                 resource_type=e.get("resource_type") or "",
                 resource_id=e.get("resource_id") or "",

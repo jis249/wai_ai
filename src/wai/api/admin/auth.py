@@ -61,6 +61,37 @@ class AvailableModelsResponse(BaseModel):
 _DUMMY_HASH = bcrypt.hashpw(b"wa-dummy-timing-pad", bcrypt.gensalt())
 
 
+def _log_auth_audit(
+    h,
+    request: Request,
+    *,
+    action: str,
+    email: str,
+    status_code: int,
+    org_id: str = "",
+    actor_id: str = "",
+    method: str = "local",
+    detail: str = "",
+) -> None:
+    if h.audit_logger is None:
+        return
+    description = detail or f"email={email} method={method}"
+    h.audit_logger.log(
+        AuditEvent(
+            request_id=getattr(request.state, "request_id", "") or "",
+            org_id=org_id,
+            actor_id=actor_id,
+            actor_type="user" if actor_id else "anonymous",
+            action=action,
+            resource_type="auth",
+            resource_id=actor_id or email,
+            description=description,
+            ip_address=client_ip(request),
+            status_code=status_code,
+        )
+    )
+
+
 @router.post("/auth/login", response_model=LoginResponse)
 async def login(body: LoginRequest, request: Request) -> LoginResponse:
     h = get_handler()
@@ -77,12 +108,21 @@ async def login(body: LoginRequest, request: Request) -> LoginResponse:
         bcrypt.checkpw(body.password.encode(), _DUMMY_HASH)
         if h.brute_force is not None:
             await h.brute_force.record_failure(ip, "login")
+        _log_auth_audit(
+            h, request, action="auth.login_failed", email=body.email,
+            status_code=401, detail=f"login failed: unknown email email={body.email} method=local",
+        )
         raise unauthorized("invalid email or password")
     except Exception:
         raise internal_error("authentication failed")
     if not bcrypt.checkpw(body.password.encode(), pw_hash.encode()):
         if h.brute_force is not None:
             await h.brute_force.record_failure(ip, "login")
+        _log_auth_audit(
+            h, request, action="auth.login_failed", email=body.email,
+            actor_id=user_id, status_code=401,
+            detail=f"login failed: invalid password email={body.email} method=local",
+        )
         raise unauthorized("invalid email or password")
     try:
         role, org_id = await repo.resolve_user_role(h.db, user_id)
@@ -125,21 +165,11 @@ async def login(body: LoginRequest, request: Request) -> LoginResponse:
     )
     if h.brute_force is not None:
         await h.brute_force.clear(ip, "login")
-    if h.audit_logger is not None:
-        h.audit_logger.log(
-            AuditEvent(
-                request_id=getattr(request.state, "request_id", "") or "",
-                org_id=org_id,
-                actor_id=user_id,
-                actor_type="user",
-                action="auth.login",
-                resource_type="user",
-                resource_id=user_id,
-                description=f"login success email={body.email}",
-                ip_address=ip,
-                status_code=200,
-            )
-        )
+    _log_auth_audit(
+        h, request, action="auth.login", email=body.email, org_id=org_id,
+        actor_id=user_id, status_code=200, method="local",
+        detail=f"login success email={body.email} method=local",
+    )
     return LoginResponse(
         token=key,
         expires_at=expires_at_str,
@@ -297,6 +327,11 @@ async def oidc_exchange(request: Request, response: Response) -> LoginResponse:
         raise unauthorized("invalid session")
     response.delete_cookie("wai_oidc_token", path="/auth/callback")
     expires_at_str = info.expires_at.strftime("%Y-%m-%dT%H:%M:%S+00:00") if info.expires_at else ""
+    _log_auth_audit(
+        h, request, action="auth.login", email=user["email"], org_id=info.org_id,
+        actor_id=user["id"], status_code=200, method="oidc",
+        detail=f"login success email={user['email']} method=oidc",
+    )
     return LoginResponse(
         token=key,
         expires_at=expires_at_str,

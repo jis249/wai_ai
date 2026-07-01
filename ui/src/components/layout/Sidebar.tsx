@@ -202,6 +202,7 @@ function buildNavigation(): NavGroup[] {
       label: 'Manage',
       items: [
         { label: 'Keys', path: '/keys', icon: <IconKey /> },
+        { label: 'Models', path: '/models', icon: <IconCube /> },
         { label: 'Teams', path: '/teams', icon: <IconUsers />, minRole: 'team_admin', end: false },
         { label: 'Service Accounts', path: '/service-accounts', icon: <IconBot /> },
         { label: 'MCP Servers', path: '/mcp-servers', icon: <IconPlug /> },
@@ -227,7 +228,6 @@ function buildNavigation(): NavGroup[] {
       items: [
         { label: 'Organizations', path: '/orgs', icon: <IconBuilding />, end: false },
         { label: 'Users', path: '/users', icon: <IconPersonPlus /> },
-        { label: 'Models', path: '/models', icon: <IconCube />, minRole: 'system_admin' },
         { label: 'System Usage', path: '/system-usage', icon: <IconServer /> },
       ],
     },

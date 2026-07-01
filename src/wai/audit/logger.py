@@ -26,9 +26,17 @@ class AuditEvent:
 
 
 class AuditLogger:
-    def __init__(self, db: Database, *, buffer_size: int = 256, log: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        db: Database,
+        *,
+        buffer_size: int = 256,
+        flush_interval: float = 2.0,
+        log: logging.Logger | None = None,
+    ) -> None:
         self._db = db
         self._buffer_size = buffer_size
+        self._interval = max(flush_interval, 0.5)
         self._log = log or logging.getLogger("wai.audit")
         self._queue: asyncio.Queue[AuditEvent | None] = asyncio.Queue(maxsize=buffer_size)
         self._task: asyncio.Task[None] | None = None
@@ -54,7 +62,14 @@ class AuditLogger:
         batch: list[AuditEvent] = []
         try:
             while True:
-                event = await self._queue.get()
+                try:
+                    event = await asyncio.wait_for(self._queue.get(), timeout=self._interval)
+                except TimeoutError:
+                    if batch:
+                        for ev in batch:
+                            await self._insert(ev)
+                        batch = []
+                    continue
                 if event is None:
                     for ev in batch:
                         await self._insert(ev)

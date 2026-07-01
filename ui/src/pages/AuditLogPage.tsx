@@ -43,11 +43,12 @@ const RESOURCE_TYPE_OPTIONS = [
 
 const ACTION_OPTIONS = [
   { value: '', label: 'All Actions' },
+  { value: 'auth.login', label: 'Login' },
+  { value: 'auth.login_failed', label: 'Login Failed' },
   { value: 'create', label: 'Create' },
   { value: 'update', label: 'Update' },
   { value: 'replace', label: 'Replace' },
   { value: 'delete', label: 'Delete' },
-  { value: 'auth.login', label: 'Login' },
 ]
 
 const PAGE_SIZE_OPTIONS = [
@@ -59,6 +60,8 @@ const PAGE_SIZE_OPTIONS = [
 const EXPORT_HEADERS = [
   { key: 'timestamp', label: 'Time' },
   { key: 'actor_type', label: 'Actor Type' },
+  { key: 'actor_display_name', label: 'Actor Name' },
+  { key: 'actor_email', label: 'Actor Email' },
   { key: 'actor_id', label: 'Actor ID' },
   { key: 'action', label: 'Action' },
   { key: 'resource_type', label: 'Resource Type' },
@@ -85,7 +88,8 @@ const ACTION_BADGE: Record<string, BadgeVariant> = {
   revoke: 'warning',
   activate: 'success',
   deactivate: 'muted',
-  login: 'default',
+  login: 'success',
+  login_failed: 'error',
 }
 
 function actionBadgeVariant(action: string): BadgeVariant {
@@ -104,6 +108,11 @@ function shortenId(id: string): string {
   if (!id) return '—'
   if (id.length <= 12) return id
   return `${id.slice(0, 8)}…`
+}
+
+function emailFromDescription(description: string): string {
+  const match = description.match(/email=([^\s]+)/)
+  return match?.[1] ?? ''
 }
 
 function IconList() {
@@ -154,13 +163,34 @@ const columns: Column<AuditEvent>[] = [
   },
   {
     key: 'actor',
-    header: 'Actor',
-    render: (row) => (
-      <span className="font-mono text-xs text-text-secondary" title={row.actor_id}>
-        <span className="text-text-tertiary mr-1">{row.actor_type}</span>
-        {shortenId(row.actor_id)}
-      </span>
-    ),
+    header: 'User',
+    render: (row) => {
+      const fallbackEmail = emailFromDescription(row.description)
+      const label = row.actor_display_name || row.actor_email || fallbackEmail
+      if (label) {
+        return (
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <span className="text-sm text-text-primary truncate" title={label}>
+              {row.actor_display_name || row.actor_email || fallbackEmail}
+            </span>
+            {(row.actor_email || fallbackEmail) && row.actor_display_name && (
+              <span className="text-xs text-text-tertiary truncate" title={row.actor_email || fallbackEmail}>
+                {row.actor_email || fallbackEmail}
+              </span>
+            )}
+            {row.actor_type && (
+              <span className="text-[11px] text-text-tertiary capitalize">{row.actor_type}</span>
+            )}
+          </div>
+        )
+      }
+      return (
+        <span className="font-mono text-xs text-text-secondary" title={row.actor_id}>
+          <span className="text-text-tertiary mr-1">{row.actor_type || 'unknown'}</span>
+          {shortenId(row.actor_id)}
+        </span>
+      )
+    },
   },
   {
     key: 'action',
@@ -293,7 +323,7 @@ export default function AuditLogPage() {
     <>
       <PageHeader
         title="Audit Log"
-        description="Full audit trail of admin actions across your organization"
+        description="Web app activity including user logins, admin changes, and API actions"
       />
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">

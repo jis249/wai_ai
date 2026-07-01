@@ -12,8 +12,7 @@ import type { MiniTableColumn } from '../components/ui/charts/MiniTable'
 import { useMe } from '../hooks/useMe'
 import { useDashboardStats } from '../hooks/useDashboardStats'
 import type { BudgetWarning } from '../hooks/useDashboardStats'
-import { useTopModels } from '../hooks/useTopModels'
-import type { UsageDataPoint } from '../hooks/useTopModels'
+import type { UsageDataPoint } from '../hooks/useUsage'
 import { useUsage, useMyUsage } from '../hooks/useUsage'
 import { useOrg } from '../hooks/useOrg'
 import { useModelHealth } from '../hooks/useModelHealth'
@@ -314,15 +313,17 @@ export default function DashboardPage() {
   const canViewOrgUsage = me?.is_system_admin === true || me?.role === 'org_admin'
   const orgId = me?.org_id ?? ''
 
-  // Time-series data for the area chart
+  // Time-series and model usage share the same range
   const { from, to } = useMemo(() => getTimeRange(timeRange), [timeRange])
-  const { from: from24h, to: to24h } = useMemo(() => getTimeRange('24h'), [])
 
-  const orgTopModels = useTopModels(
+  const orgTopModels = useUsage(
     orgId,
+    from,
+    to,
+    'model',
     !!me && canViewOrgUsage,
   )
-  const myTopModels = useMyUsage(from24h, to24h, 'model', !!me && !canViewOrgUsage)
+  const myTopModels = useMyUsage(from, to, 'model', !!me && !canViewOrgUsage)
   const { data: topModels, isLoading: modelsLoading } = canViewOrgUsage ? orgTopModels : myTopModels
   const { data: modelHealth } = useModelHealth()
 
@@ -345,11 +346,13 @@ export default function DashboardPage() {
   // Team usage (admin only)
   const { data: teamUsage, isLoading: teamUsageLoading } = useUsage(
     orgId,
-    from24h,
-    to24h,
+    from,
+    to,
     'team',
     !!me && canViewOrgUsage,
   )
+
+  const emptyPeriodLabel = `No data for the last ${timeRange}`
 
   const scope = stats?.scope ?? (canViewOrgUsage ? 'org' : 'user')
   const description = scopeDescriptions[scope] ?? 'Your wai usage overview'
@@ -385,11 +388,14 @@ export default function DashboardPage() {
   // Build horizontal bar data for top models
   const topModelsBars = useMemo(() => {
     if (!topModels?.data) return []
-    return topModels.data.slice(0, 6).map((m) => ({
-      label: m.group_key,
-      value: m.total_tokens,
-      detail: `${formatTokens(m.total_tokens)} Tokens`,
-    }))
+    return [...topModels.data]
+      .sort((a, b) => b.total_tokens - a.total_tokens)
+      .slice(0, 6)
+      .map((m) => ({
+        label: m.group_key,
+        value: m.total_tokens,
+        detail: `${formatTokens(m.total_tokens)} Tokens`,
+      }))
   }, [topModels])
 
   // Build donut segments from prompt/completion token split
@@ -538,7 +544,10 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Top Models */}
             <div className="bg-bg-secondary rounded-xl border border-border p-6">
-              <h2 className="text-lg font-semibold text-text-primary mb-6">Top Models</h2>
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-lg font-semibold text-text-primary">Top Models</h2>
+                <TimeRangePills value={timeRange} onChange={setTimeRange} />
+              </div>
               {modelsLoading ? (
                 <div className="space-y-5">
                   {[1, 2, 3].map((i) => (
@@ -551,7 +560,7 @@ export default function DashboardPage() {
               ) : topModelsBars.length > 0 ? (
                 <HorizontalBar items={topModelsBars} />
               ) : (
-                <p className="text-sm text-text-tertiary">No model usage in the last 24 hours</p>
+                <p className="text-sm text-text-tertiary">{emptyPeriodLabel}</p>
               )}
             </div>
 
@@ -575,7 +584,7 @@ export default function DashboardPage() {
                   />
                 </div>
               ) : (
-                <p className="text-sm text-text-tertiary">No token data available</p>
+                <p className="text-sm text-text-tertiary">{emptyPeriodLabel}</p>
               )}
             </div>
           </div>
@@ -586,7 +595,10 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Usage by Team */}
             <div className="bg-bg-secondary rounded-xl border border-border p-6">
-              <h2 className="text-lg font-semibold text-text-primary mb-6">Usage by Team</h2>
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-lg font-semibold text-text-primary">Usage by Team</h2>
+                <TimeRangePills value={timeRange} onChange={setTimeRange} />
+              </div>
               {teamUsageLoading ? (
                 <div className="space-y-5">
                   {[1, 2, 3].map((i) => (
@@ -599,7 +611,7 @@ export default function DashboardPage() {
               ) : teamBars.length > 0 ? (
                 <HorizontalBar items={teamBars} color="#6366f1" />
               ) : (
-                <p className="text-sm text-text-tertiary">No team usage in the last 24 hours</p>
+                <p className="text-sm text-text-tertiary">{emptyPeriodLabel}</p>
               )}
             </div>
 
@@ -618,7 +630,7 @@ export default function DashboardPage() {
                   data={perfRows}
                 />
               ) : (
-                <p className="text-sm text-text-tertiary">No model data available</p>
+                <p className="text-sm text-text-tertiary">{emptyPeriodLabel}</p>
               )}
             </div>
           </div>
