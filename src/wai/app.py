@@ -31,6 +31,7 @@ from wai.ratelimit import BruteForceGuard, RateLimiter
 from wai.usage.logger import UsageLogger
 from wai.middleware.request_id import RequestIDMiddleware
 from wai.proxy.auth import proxy_auth_middleware
+from wai.proxy.auto_router_settings import apply_to_proxy, load_auto_router_config
 from wai.proxy.handler import ProxyHandler
 from wai.proxy.models_handler import models_handler
 from wai.proxy.registry import Registry, load_db_into_registry, sync_yaml_models
@@ -153,6 +154,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
         await usage_logger.start()
         state["usage_logger"] = usage_logger
 
+        auto_cfg = await load_auto_router_config(db, cfg.settings.auto_router)
         state["proxy_handler"] = ProxyHandler(
             registry,
             access_cache=state["access_cache"],
@@ -162,6 +164,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
             max_request_body=cfg.server.proxy.max_request_body,
             max_response_body=cfg.server.proxy.max_response_body,
             max_stream_duration=cfg.server.proxy.max_stream_duration.total_seconds(),
+            auto_router_config=auto_cfg,
         )
 
         if not state["routes_registered"]:
@@ -171,6 +174,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
         app.state.config = cfg
         app.state.db = db
         app.state.registry = registry
+        app.state.proxy_handler = state["proxy_handler"]
 
         yield
 
@@ -212,19 +216,29 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
 
         @target_app.get("/v1/models", dependencies=[Depends(proxy_auth_middleware)])
         async def list_models(request: Request):
-            return await models_handler(registry, state["access_cache"])(request)
+            auto_enabled = bool(getattr(cfg.settings.auto_router, "enabled", True))
+            return await models_handler(
+                registry,
+                state["access_cache"],
+                auto_enabled=auto_enabled,
+            )(request)
 
         @target_app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
         async def proxy_route(request: Request, path: str):
             await proxy_auth_middleware(request)
             ph: ProxyHandler | None = state["proxy_handler"]
             if ph is None:
+                auto_cfg = await load_auto_router_config(db, cfg.settings.auto_router)
                 ph = ProxyHandler(
                     registry,
                     access_cache=state["access_cache"],
                     alias_cache=state["alias_cache"],
                     usage_logger=state.get("usage_logger"),
+                    auto_router_config=auto_cfg,
                 )
+                state["proxy_handler"] = ph
+                app.state.proxy_handler = ph
+                apply_to_proxy(ph, auto_cfg)
             return await ph.handle(request, path)
 
         ui_dist = Path(__file__).resolve().parents[2] / "ui" / "dist"

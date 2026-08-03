@@ -125,6 +125,16 @@ class RateLimitConfig:
 
 
 @dataclass
+class AutoRouterSettings:
+    enabled: bool = True
+    default_model: str = "qwen3-coder:30b-gpu"
+    classifier_model: str = "qwen3-coder:30b-gpu"
+    classifier_timeout_seconds: float = 8.0
+    complex_mode: str = "random"
+    complex_model: str = ""
+
+
+@dataclass
 class SettingsConfig:
     admin_key: str = ""
     encryption_key: str = ""
@@ -132,6 +142,7 @@ class SettingsConfig:
     usage: UsageConfig = field(default_factory=UsageConfig)
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
     fallback_max_depth: int = 0
+    auto_router: AutoRouterSettings = field(default_factory=AutoRouterSettings)
 
 
 @dataclass

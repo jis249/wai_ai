@@ -13,6 +13,13 @@ from fastapi.responses import Response, StreamingResponse
 
 from wai.api.admin.common import KEY_INFO_CTX, KeyInfo, api_error
 from wai.proxy.access import AliasCache, ModelAccessCache
+from wai.proxy.auto_router import (
+    AUTO_MODEL_NAME,
+    AutoRouter,
+    AutoRouterConfig,
+    RoutingDecision,
+    candidates_from_models,
+)
 from wai.proxy.providers import get_adapter
 from wai.proxy.registry import ERR_MODEL_NOT_FOUND, Model, Registry
 from wai.usage.event import UsageEvent, UsageInfo, extract_usage, observe_stream_usage_line
@@ -62,6 +69,7 @@ class ProxyHandler:
         max_request_body: int = 20 * 1024 * 1024,
         max_response_body: int = 50 * 1024 * 1024,
         max_stream_duration: float = 300.0,
+        auto_router_config: AutoRouterConfig | None = None,
     ) -> None:
         self.registry = registry
         self.access_cache = access_cache
@@ -71,6 +79,7 @@ class ProxyHandler:
         self.max_request_body = max_request_body
         self.max_response_body = max_response_body
         self.max_stream_duration = max_stream_duration
+        self.auto_router = AutoRouter(auto_router_config or AutoRouterConfig(), log=self.log)
         self._client = httpx.AsyncClient(
             follow_redirects=False,
             timeout=httpx.Timeout(600.0, connect=10.0),
@@ -98,14 +107,27 @@ class ProxyHandler:
 
         key_info: KeyInfo | None = getattr(request.state, KEY_INFO_CTX, None)
         requested_model_name = model_name
-        model = self._resolve_model(key_info, model_name)
-
         upstream_path = path.lstrip("/")
         if not is_allowed_path(upstream_path):
             raise api_error(400, "bad_request", "unsupported API endpoint")
 
+        routing: RoutingDecision | None = None
+        resolve_name = self._apply_alias(key_info, model_name)
+        if resolve_name == AUTO_MODEL_NAME:
+            if not self.auto_router.config.enabled:
+                raise api_error(404, "model_not_found", "the requested model was not found")
+            if upstream_path not in {"chat/completions", "completions", "embeddings"}:
+                raise api_error(
+                    400,
+                    "bad_request",
+                    "auto model routing is only supported on chat/completions, completions, and embeddings",
+                )
+            model, routing = await self._route_auto(key_info, envelope, upstream_path)
+        else:
+            model = self._resolve_model(key_info, model_name)
+
         adapter = get_adapter(model.provider)
-        needs_model_replace = model_name != model.name
+        needs_model_replace = model_name != model.name or routing is not None
         needs_stream_opts = stream
         if needs_model_replace or needs_stream_opts:
             body = mutate_request_body(body, model.name, needs_stream_opts)
@@ -121,6 +143,7 @@ class ProxyHandler:
         headers = self._build_upstream_headers(request, model, adapter)
         method = request.method.upper()
         request_id = getattr(request.state, "request_id", "") or ""
+        extra_headers = routing.as_headers(requested_model_name) if routing else {}
 
         if stream:
             return await self._stream_response(
@@ -134,6 +157,7 @@ class ProxyHandler:
                 requested_model_name=requested_model_name,
                 request_id=request_id,
                 started=started,
+                extra_headers=extra_headers,
             )
 
         resp = await self._client.request(method, upstream_url, content=body, headers=headers)
@@ -162,18 +186,93 @@ class ProxyHandler:
                 requested_model_name=requested_model_name,
             )
 
+        out_headers = self._filter_response_headers(resp.headers)
+        out_headers.update(extra_headers)
         return Response(
             content=content,
             status_code=resp.status_code,
-            headers=self._filter_response_headers(resp.headers),
+            headers=out_headers,
             media_type=resp.headers.get("content-type"),
         )
 
-    def _resolve_model(self, key_info: KeyInfo | None, model_name: str) -> Model:
+    def _apply_alias(self, key_info: KeyInfo | None, model_name: str) -> str:
         if self.alias_cache and key_info:
             canonical, ok = self.alias_cache.resolve(key_info.org_id, key_info.team_id, model_name)
             if ok:
-                model_name = canonical
+                return canonical
+        return model_name
+
+    def _accessible_models(self, key_info: KeyInfo | None) -> list[Model]:
+        models: list[Model] = []
+        for info in self.registry.list_info():
+            if info.name == AUTO_MODEL_NAME:
+                continue
+            if self.access_cache and key_info:
+                if not self.access_cache.check(
+                    key_info.org_id, key_info.team_id, key_info.id, info.name
+                ):
+                    continue
+            try:
+                models.append(self.registry.resolve(info.name))
+            except KeyError:
+                continue
+        return models
+
+    def _desired_type_for_path(self, upstream_path: str) -> str:
+        if upstream_path == "embeddings":
+            return "embedding"
+        return "chat"
+
+    async def _route_auto(
+        self,
+        key_info: KeyInfo | None,
+        envelope: dict[str, Any],
+        upstream_path: str,
+    ) -> tuple[Model, RoutingDecision]:
+        accessible = self._accessible_models(key_info)
+        desired = self._desired_type_for_path(upstream_path)
+        candidates = candidates_from_models(accessible, model_type=desired)
+        if not candidates:
+            raise api_error(
+                403,
+                "model_access_denied",
+                f"no accessible {desired} models available for auto routing",
+            )
+
+        classifier: Model | None = None
+        cfg_name = self.auto_router.config.classifier_model
+        try:
+            classifier = self.registry.resolve(cfg_name)
+            if self.access_cache and key_info:
+                if not self.access_cache.check(
+                    key_info.org_id, key_info.team_id, key_info.id, classifier.name
+                ):
+                    classifier = None
+        except KeyError:
+            classifier = None
+
+        def build_headers(model: Model, adapter: Any) -> dict[str, str]:
+            headers = {"Content-Type": "application/json", "User-Agent": "WAI/0.1"}
+            if adapter is not None:
+                return adapter.set_headers(headers, model)
+            if model.api_key:
+                headers["Authorization"] = f"Bearer {model.api_key}"
+            return headers
+
+        decision = await self.auto_router.route(
+            envelope,
+            candidates,
+            classifier_model=classifier,
+            client=self._client,
+            build_headers=build_headers,
+        )
+        model = self._resolve_model(key_info, decision.model_name)
+        return model, decision
+
+    def _resolve_model(self, key_info: KeyInfo | None, model_name: str) -> Model:
+        model_name = self._apply_alias(key_info, model_name)
+        if model_name == AUTO_MODEL_NAME:
+            raise api_error(404, "model_not_found", "the requested model was not found")
         try:
             model = self.registry.resolve(model_name)
         except KeyError as exc:
@@ -217,6 +316,7 @@ class ProxyHandler:
         requested_model_name: str,
         request_id: str,
         started: float,
+        extra_headers: dict[str, str] | None = None,
     ) -> StreamingResponse:
         usage = UsageInfo()
         ttft_ms: int | None = None
@@ -260,7 +360,11 @@ class ProxyHandler:
                     requested_model_name=requested_model_name,
                 )
 
-        return StreamingResponse(wrapped_generator(), media_type="text/event-stream")
+        return StreamingResponse(
+            wrapped_generator(),
+            media_type="text/event-stream",
+            headers=extra_headers or None,
+        )
 
     def _log_usage(
         self,

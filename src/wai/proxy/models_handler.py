@@ -7,12 +7,15 @@ from fastapi.responses import JSONResponse
 
 from wai.api.admin.common import KEY_INFO_CTX, KeyInfo
 from wai.proxy.access import ModelAccessCache
+from wai.proxy.auto_router import AUTO_MODEL_NAME
 from wai.proxy.registry import Registry
 
 
 def models_handler(
     registry: Registry,
     access_cache: ModelAccessCache | None,
+    *,
+    auto_enabled: bool = True,
 ) -> callable:
     async def handle(request: Request) -> JSONResponse:
         all_models = registry.list_info()
@@ -37,6 +40,19 @@ def models_handler(
             }
             for m in accessible
         ]
+
+        if auto_enabled and any((m.type or "chat") in ("chat", "completion") for m in accessible):
+            data.insert(
+                0,
+                {
+                    "id": AUTO_MODEL_NAME,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "wai",
+                    "aliases": [],
+                },
+            )
+
         return JSONResponse({"object": "list", "data": data})
 
     return handle

@@ -189,6 +189,17 @@ function IconServer() {
   )
 }
 
+function IconRoute() {
+  return (
+    <svg {...iconProps}>
+      <circle cx="6" cy="19" r="3" />
+      <circle cx="18" cy="5" r="3" />
+      <path d="M6 16V9a4 4 0 0 1 4-4h0" />
+      <path d="M18 8v7a4 4 0 0 1-4 4h0" />
+    </svg>
+  )
+}
+
 function buildNavigation(): NavGroup[] {
   return [
     {
@@ -229,6 +240,7 @@ function buildNavigation(): NavGroup[] {
         { label: 'Organizations', path: '/orgs', icon: <IconBuilding />, end: false },
         { label: 'Users', path: '/users', icon: <IconPersonPlus /> },
         { label: 'System Usage', path: '/system-usage', icon: <IconServer /> },
+        { label: 'Auto routing', path: '/auto-routing', icon: <IconRoute /> },
       ],
     },
   ]

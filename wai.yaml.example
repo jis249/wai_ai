@@ -35,6 +35,15 @@ models:
 settings:
   admin_key: ${WAI_ADMIN_KEY}
   encryption_key: ${WAI_ENCRYPTION_KEY}
+  # Hybrid auto router: model "auto" picks from accessible models
+  auto_router:
+    enabled: true
+    default_model: qwen3-coder:30b-gpu
+    classifier_model: qwen3-coder:30b-gpu
+    classifier_timeout_seconds: 8
+    # complex_mode: random | fixed
+    complex_mode: random
+    complex_model: ""
   rate_limit:
     login_max_attempts: 10
     login_window_minutes: 15

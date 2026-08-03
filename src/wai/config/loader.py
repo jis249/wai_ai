@@ -13,6 +13,7 @@ import yaml
 
 from wai.config.models import (
     AdminConfig,
+    AutoRouterSettings,
     BootstrapConfig,
     CacheConfig,
     Config,
@@ -182,6 +183,22 @@ def _mcp_server(raw: dict[str, Any]) -> MCPServerConfig:
     )
 
 
+def _auto_router(raw: dict[str, Any]) -> AutoRouterSettings:
+    enabled = raw.get("enabled")
+    timeout = raw.get("classifier_timeout_seconds", 8.0)
+    mode = str(raw.get("complex_mode") or "random").lower().strip()
+    if mode not in ("random", "fixed"):
+        mode = "random"
+    return AutoRouterSettings(
+        enabled=True if enabled is None else bool(enabled),
+        default_model=str(raw.get("default_model") or "qwen3-coder:30b-gpu"),
+        classifier_model=str(raw.get("classifier_model") or raw.get("default_model") or "qwen3-coder:30b-gpu"),
+        classifier_timeout_seconds=float(timeout if timeout is not None else 8.0),
+        complex_mode=mode,
+        complex_model=str(raw.get("complex_model") or ""),
+    )
+
+
 def _from_dict(data: dict[str, Any]) -> Config:
     server_raw = data.get("server") or {}
     proxy_raw = server_raw.get("proxy") or {}
@@ -264,6 +281,7 @@ def _from_dict(data: dict[str, Any]) -> Config:
                 invite_window_minutes=int(rate_raw.get("invite_window_minutes") or 15),
             ),
             fallback_max_depth=int(settings_raw.get("fallback_max_depth") or 0),
+            auto_router=_auto_router(settings_raw.get("auto_router") or {}),
         ),
         logging=LoggingConfig(
             level=str(logging_raw.get("level") or ""),

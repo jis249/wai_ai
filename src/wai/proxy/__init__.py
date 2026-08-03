@@ -1,12 +1,16 @@
 """OpenAI-compatible LLM proxy."""
 
 from wai.proxy.access import AliasCache, ModelAccessCache, load_access_cache, load_alias_cache, reload_access_cache
+from wai.proxy.auto_router import AUTO_MODEL_NAME, AutoRouter, AutoRouterConfig
 from wai.proxy.handler import ProxyHandler
 from wai.proxy.models_handler import models_handler
 from wai.proxy.registry import Registry, load_db_into_registry, sync_yaml_models
 
 __all__ = [
+    "AUTO_MODEL_NAME",
     "AliasCache",
+    "AutoRouter",
+    "AutoRouterConfig",
     "ModelAccessCache",
     "ProxyHandler",
     "Registry",

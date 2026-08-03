@@ -207,9 +207,15 @@ async def me(key_info: KeyInfo = Depends(auth_middleware)) -> MeResponse:
 async def available_models(key_info: KeyInfo = Depends(auth_middleware)) -> AvailableModelsResponse:
     h = get_handler()
     models = []
+    has_chat = False
     for m in h.registry.list_info():
         if h.access_cache.check(key_info.org_id, key_info.team_id, key_info.id, m["name"]):
-            models.append(AvailableModel(name=m["name"], type=m.get("type") or "chat"))
+            mtype = m.get("type") or "chat"
+            if mtype in ("chat", "completion"):
+                has_chat = True
+            models.append(AvailableModel(name=m["name"], type=mtype))
+    if has_chat:
+        models.insert(0, AvailableModel(name="auto", type="chat"))
     return AvailableModelsResponse(models=models)
 
 

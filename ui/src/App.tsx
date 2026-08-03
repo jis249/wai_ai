@@ -36,6 +36,7 @@ import PlaygroundPage from './pages/PlaygroundPage'
 import SystemUsersPage from './pages/SystemUsersPage'
 import MCPServersPage from './pages/MCPServersPage'
 import SystemUsagePage from './pages/SystemUsagePage'
+import AutoRoutingPage from './pages/AutoRoutingPage'
 import { ToastProvider } from './hooks/useToast'
 import { ThemeProvider } from './hooks/useTheme'
 import { Shell } from './components/layout/Shell'
@@ -110,6 +111,7 @@ export default function App() {
               <Route path="sso" element={<SSOConfigPage />} />
               <Route path="orgs" element={<OrganizationsPage />} />
               <Route path="system-usage" element={<SystemUsagePage />} />
+              <Route path="auto-routing" element={<AutoRoutingPage />} />
               <Route path="orgs/:orgId" element={<OrgDetailPage />}>
                 <Route index element={<Navigate to="members" replace />} />
                 <Route path="members" element={<OrgDetailMembersTab />} />

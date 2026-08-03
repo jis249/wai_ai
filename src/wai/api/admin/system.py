@@ -11,12 +11,24 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
-from wai.api.admin.common import KeyInfo, ROLE_SYSTEM_ADMIN
+from wai.api.admin.common import KeyInfo, ROLE_SYSTEM_ADMIN, bad_request
 from wai.api.admin.handler import get_handler, require_role
+from wai.proxy.auto_router import (
+    COMPLEX_MODE_FIXED,
+    COMPLEX_MODE_RANDOM,
+    VALID_COMPLEX_MODES,
+    AutoRouterConfig,
+)
+from wai.proxy.auto_router_settings import (
+    apply_to_proxy,
+    load_auto_router_config,
+    save_auto_router_config,
+)
 
 router = APIRouter()
 
@@ -230,3 +242,92 @@ async def system_usage(_: KeyInfo = Depends(require_role(ROLE_SYSTEM_ADMIN))) ->
 async def server_config(_: KeyInfo = Depends(require_role(ROLE_SYSTEM_ADMIN))) -> ServerConfigResponse:
     h = get_handler()
     return ServerConfigResponse(fallback_max_depth=h.fallback_max_depth)
+
+
+class AutoRouterConfigResponse(BaseModel):
+    enabled: bool
+    default_model: str
+    classifier_model: str
+    classifier_timeout_seconds: float
+    complex_mode: Literal["random", "fixed"]
+    complex_model: str = ""
+
+
+class AutoRouterConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    default_model: str | None = None
+    classifier_model: str | None = None
+    classifier_timeout_seconds: float | None = None
+    complex_mode: Literal["random", "fixed"] | None = None
+    complex_model: str | None = None
+
+
+def _auto_response(cfg: AutoRouterConfig) -> AutoRouterConfigResponse:
+    mode = cfg.complex_mode if cfg.complex_mode in VALID_COMPLEX_MODES else COMPLEX_MODE_RANDOM
+    return AutoRouterConfigResponse(
+        enabled=cfg.enabled,
+        default_model=cfg.default_model,
+        classifier_model=cfg.classifier_model,
+        classifier_timeout_seconds=cfg.classifier_timeout_seconds,
+        complex_mode=mode,  # type: ignore[arg-type]
+        complex_model=cfg.complex_model or "",
+    )
+
+
+@router.get("/settings/auto-router", response_model=AutoRouterConfigResponse)
+async def get_auto_router_settings(
+    request: Request,
+    _: KeyInfo = Depends(require_role(ROLE_SYSTEM_ADMIN)),
+) -> AutoRouterConfigResponse:
+    h = get_handler()
+    cfg = getattr(request.app.state, "config", None)
+    if cfg is not None:
+        yaml_settings = cfg.settings.auto_router
+    else:
+        from wai.config.models import AutoRouterSettings
+
+        yaml_settings = AutoRouterSettings()
+    current = await load_auto_router_config(h.db, yaml_settings)
+    ph = getattr(request.app.state, "proxy_handler", None)
+    if ph is not None and getattr(ph, "auto_router", None) is not None:
+        current = ph.auto_router.config
+    return _auto_response(current)
+
+
+@router.put("/settings/auto-router", response_model=AutoRouterConfigResponse)
+async def put_auto_router_settings(
+    body: AutoRouterConfigUpdate,
+    request: Request,
+    _: KeyInfo = Depends(require_role(ROLE_SYSTEM_ADMIN)),
+) -> AutoRouterConfigResponse:
+    h = get_handler()
+    cfg = getattr(request.app.state, "config", None)
+    if cfg is not None:
+        yaml_settings = cfg.settings.auto_router
+    else:
+        from wai.config.models import AutoRouterSettings
+
+        yaml_settings = AutoRouterSettings()
+
+    current = await load_auto_router_config(h.db, yaml_settings)
+    ph = getattr(request.app.state, "proxy_handler", None)
+    if ph is not None and getattr(ph, "auto_router", None) is not None:
+        current = ph.auto_router.config
+
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "complex_mode" in patch and patch["complex_mode"] not in VALID_COMPLEX_MODES:
+        raise bad_request("complex_mode must be 'random' or 'fixed'")
+    if patch.get("complex_mode") == COMPLEX_MODE_FIXED and not (
+        patch.get("complex_model") or current.complex_model
+    ):
+        raise bad_request("complex_model is required when complex_mode is 'fixed'")
+
+    updated = AutoRouterConfig.from_dict(patch, base=current)
+    if updated.complex_mode == COMPLEX_MODE_FIXED and not updated.complex_model:
+        raise bad_request("complex_model is required when complex_mode is 'fixed'")
+    if updated.classifier_timeout_seconds <= 0:
+        raise bad_request("classifier_timeout_seconds must be > 0")
+
+    await save_auto_router_config(h.db, updated)
+    apply_to_proxy(ph, updated)
+    return _auto_response(updated)
