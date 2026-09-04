@@ -42,6 +42,8 @@ export interface TableProps<T> {
   expandedKeys?: Set<string>
   /** Called when a row's expand/collapse state is toggled. */
   onToggleExpand?: (key: string) => void
+  /** Called when a row is clicked (e.g. to expand). */
+  onRowClick?: (row: T) => void
 }
 
 function SortIndicator({ column, sort }: { column: string; sort?: SortState }) {
@@ -115,6 +117,7 @@ export function Table<T>({
   renderExpandedRow,
   expandedKeys,
   onToggleExpand,
+  onRowClick,
 }: TableProps<T>) {
   const cellPadding = compact ? 'px-3 py-2' : 'px-4 py-3'
   const hasExpand = renderExpandedRow != null
@@ -202,14 +205,19 @@ export function Table<T>({
                     className={cn(
                       'hover:bg-bg-tertiary/30 transition-colors',
                       showRowBorder && 'border-b border-border',
+                      onRowClick != null && isExpandable && 'cursor-pointer',
                     )}
+                    onClick={onRowClick != null && isExpandable ? () => onRowClick(row) : undefined}
                   >
                     {hasExpand && (
                       <td className="w-8 px-2">
                         {isExpandable ? (
                           <button
                             type="button"
-                            onClick={() => onToggleExpand?.(key)}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onToggleExpand?.(key)
+                            }}
                             className="flex items-center justify-center w-6 h-6 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-tertiary transition-colors"
                             aria-label={isExpanded ? 'Collapse row' : 'Expand row'}
                             aria-expanded={isExpanded}

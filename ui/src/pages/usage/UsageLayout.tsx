@@ -5,6 +5,7 @@ const tabs = [
   { path: '/usage', label: 'Overview', exact: true },
   { path: '/usage/llm', label: 'LLM' },
   { path: '/usage/mcp', label: 'MCP' },
+  { path: '/usage/auto', label: 'Auto' },
 ]
 
 export default function UsageLayout() {
@@ -14,7 +15,7 @@ export default function UsageLayout() {
     <>
       <PageHeader
         title="Usage"
-        description="Track token usage and costs across LLM and MCP"
+        description="Track token usage and costs across LLM, MCP, and auto routing"
       />
 
       <div className="flex items-center gap-1 mb-6 border-b border-border">

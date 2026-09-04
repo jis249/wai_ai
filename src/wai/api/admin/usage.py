@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from wai.api.admin.common import (
@@ -19,6 +19,7 @@ from wai.api.admin.common import (
 )
 from wai.api.admin.handler import auth_middleware, get_handler, require_role
 from wai.api.admin import repository as repo
+from wai.proxy.auto_router_settings import load_auto_router_config
 
 router = APIRouter()
 
@@ -180,4 +181,212 @@ async def get_org_usage(
         to=to_dt.isoformat(),
         group_by=group_by,
         data=_points(aggs),
+    )
+
+
+class AutoRoutingUsageRow(BaseModel):
+    org_id: str = ""
+    org_label: str = ""
+    user_id: str = ""
+    user_label: str = ""
+    routed_model: str = ""
+    total_requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost_estimate: float = 0
+
+
+class AutoRoutingModelUsage(BaseModel):
+    routed_model: str = ""
+    total_requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost_estimate: float = 0
+
+
+class AutoRoutingUsageResponse(BaseModel):
+    org_id: str = ""
+    from_: str = Field(alias="from")
+    to: str
+    default_model: str = ""
+    total_requests: int = 0
+    total_tokens: int = 0
+    cost_estimate: float = 0
+    by_user_model: list[AutoRoutingUsageRow] = Field(default_factory=list)
+    by_model: list[AutoRoutingModelUsage] = Field(default_factory=list)
+
+    model_config = {"populate_by_name": True}
+
+
+async def _current_auto_router_default_model(db, request: Request | None = None) -> str:
+    from wai.config.models import AutoRouterSettings
+
+    yaml_settings = AutoRouterSettings()
+    if request is not None:
+        cfg = getattr(request.app.state, "config", None)
+        if cfg is not None:
+            yaml_settings = cfg.settings.auto_router
+        ph = getattr(request.app.state, "proxy_handler", None)
+        if ph is not None and getattr(ph, "auto_router", None) is not None:
+            return ph.auto_router.config.default_model
+    current = await load_auto_router_config(db, yaml_settings)
+    return current.default_model
+
+
+async def _enrich_auto_routing_labels(db, rows: list[dict], *, include_org: bool) -> list[dict]:
+    if not rows:
+        return rows
+    user_ids = [r.get("user_id") for r in rows if r.get("user_id")]
+    if user_ids:
+        placeholders = ",".join("?" * len(user_ids))
+        name_rows = await db.fetchall(
+            f"SELECT id, display_name, email FROM users WHERE id IN ({placeholders}) AND deleted_at IS NULL",
+            tuple(user_ids),
+        )
+        names = {row["id"]: row["display_name"] or row["email"] for row in name_rows}
+        for row in rows:
+            uid = row.get("user_id") or ""
+            row["user_label"] = names.get(uid, uid or "—")
+    if include_org:
+        org_ids = list({r.get("org_id") for r in rows if r.get("org_id")})
+        if org_ids:
+            placeholders = ",".join("?" * len(org_ids))
+            org_rows = await db.fetchall(
+                f"SELECT id, name FROM orgs WHERE id IN ({placeholders}) AND deleted_at IS NULL",
+                tuple(org_ids),
+            )
+            org_names = {row["id"]: row["name"] for row in org_rows}
+            for row in rows:
+                oid = row.get("org_id") or ""
+                row["org_label"] = org_names.get(oid, oid or "—")
+    return rows
+
+
+def _auto_routing_response(
+    raw: dict,
+    rows: list[dict],
+    *,
+    org_id: str,
+    from_iso: str,
+    to_iso: str,
+    include_org: bool,
+    default_model: str = "",
+) -> AutoRoutingUsageResponse:
+    return AutoRoutingUsageResponse(
+        org_id=org_id,
+        **{"from": from_iso},
+        to=to_iso,
+        default_model=default_model,
+        total_requests=int(raw.get("total_requests") or 0),
+        total_tokens=int(raw.get("total_tokens") or 0),
+        cost_estimate=float(raw.get("cost_estimate") or 0),
+        by_user_model=[
+            AutoRoutingUsageRow(
+                org_id=r.get("org_id") or "",
+                org_label=r.get("org_label") or ("" if not include_org else r.get("org_id") or "—"),
+                user_id=r.get("user_id") or "",
+                user_label=r.get("user_label") or r.get("user_id") or "—",
+                routed_model=r.get("routed_model") or "",
+                total_requests=int(r.get("total_requests") or 0),
+                prompt_tokens=int(r.get("prompt_tokens") or 0),
+                completion_tokens=int(r.get("completion_tokens") or 0),
+                total_tokens=int(r.get("total_tokens") or 0),
+                cost_estimate=float(r.get("cost_estimate") or 0),
+            )
+            for r in rows
+        ],
+        by_model=[
+            AutoRoutingModelUsage(
+                routed_model=r.get("routed_model") or "",
+                total_requests=int(r.get("total_requests") or 0),
+                prompt_tokens=int(r.get("prompt_tokens") or 0),
+                completion_tokens=int(r.get("completion_tokens") or 0),
+                total_tokens=int(r.get("total_tokens") or 0),
+                cost_estimate=float(r.get("cost_estimate") or 0),
+            )
+            for r in raw.get("by_model") or []
+        ],
+    )
+
+
+@router.get("/usage/me/auto", response_model=AutoRoutingUsageResponse)
+async def my_auto_routing_usage(
+    request: Request,
+    from_: str = Query(alias="from"),
+    to: str = Query(),
+    key_info: KeyInfo = Depends(auth_middleware),
+) -> AutoRoutingUsageResponse:
+    h = get_handler()
+    from_dt, to_dt = _parse_range(from_, to)
+    default_model = await _current_auto_router_default_model(h.db, request)
+    raw = await repo.get_auto_routing_usage(
+        h.db,
+        from_dt.isoformat(),
+        to_dt.isoformat(),
+        org_id=key_info.org_id,
+        team_id=key_info.team_id,
+        user_id=key_info.user_id,
+    )
+    rows = await _enrich_auto_routing_labels(h.db, raw.get("by_user_model") or [], include_org=False)
+    return _auto_routing_response(
+        raw, rows, org_id=key_info.org_id,
+        from_iso=from_dt.isoformat(), to_iso=to_dt.isoformat(), include_org=False,
+        default_model=default_model,
+    )
+
+
+@router.get("/usage/auto", response_model=AutoRoutingUsageResponse)
+async def system_admin_auto_routing_usage(
+    request: Request,
+    from_: str = Query(alias="from"),
+    to: str = Query(),
+    org_id: str = Query(""),
+    _: KeyInfo = Depends(require_role(ROLE_SYSTEM_ADMIN)),
+) -> AutoRoutingUsageResponse:
+    h = get_handler()
+    from_dt, to_dt = _parse_range(from_, to)
+    default_model = await _current_auto_router_default_model(h.db, request)
+    oid = org_id or ""
+    raw = await repo.get_auto_routing_usage(
+        h.db,
+        from_dt.isoformat(),
+        to_dt.isoformat(),
+        org_id=oid,
+    )
+    rows = await _enrich_auto_routing_labels(
+        h.db, raw.get("by_user_model") or [], include_org=not oid,
+    )
+    return _auto_routing_response(
+        raw, rows, org_id=oid,
+        from_iso=from_dt.isoformat(), to_iso=to_dt.isoformat(), include_org=not oid,
+        default_model=default_model,
+    )
+
+
+@router.get("/orgs/{org_id}/usage/auto", response_model=AutoRoutingUsageResponse)
+async def get_org_auto_routing_usage(
+    org_id: str,
+    request: Request,
+    from_: str = Query(alias="from"),
+    to: str = Query(),
+    key_info: KeyInfo = Depends(require_role(ROLE_ORG_ADMIN)),
+) -> AutoRoutingUsageResponse:
+    h = get_handler()
+    if not has_role(key_info.role, ROLE_SYSTEM_ADMIN) and key_info.org_id != org_id:
+        raise forbidden()
+    from_dt, to_dt = _parse_range(from_, to)
+    default_model = await _current_auto_router_default_model(h.db, request)
+    raw = await repo.get_auto_routing_usage(
+        h.db,
+        from_dt.isoformat(),
+        to_dt.isoformat(),
+        org_id=org_id,
+    )
+    rows = await _enrich_auto_routing_labels(h.db, raw.get("by_user_model") or [], include_org=False)
+    return _auto_routing_response(
+        raw, rows, org_id=org_id,
+        from_iso=from_dt.isoformat(), to_iso=to_dt.isoformat(), include_org=False,
+        default_model=default_model,
     )

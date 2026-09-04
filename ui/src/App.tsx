@@ -29,6 +29,7 @@ import UsageLayout from './pages/usage/UsageLayout'
 import UsageOverviewPage from './pages/usage/UsageOverviewPage'
 import LLMUsagePage from './pages/usage/LLMUsagePage'
 import MCPUsagePage from './pages/usage/MCPUsagePage'
+import AutoUsagePage from './pages/usage/AutoUsagePage'
 import CostReportsPage from './pages/CostReportsPage'
 import ProfilePage from './pages/ProfilePage'
 import AuditLogPage from './pages/AuditLogPage'
@@ -104,6 +105,7 @@ export default function App() {
                 <Route index element={<UsageOverviewPage />} />
                 <Route path="llm" element={<LLMUsagePage />} />
                 <Route path="mcp" element={<MCPUsagePage />} />
+                <Route path="auto" element={<AutoUsagePage />} />
               </Route>
               <Route path="cost-reports" element={<CostReportsPage />} />
               <Route path="profile" element={<ProfilePage />} />

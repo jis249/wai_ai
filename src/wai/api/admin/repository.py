@@ -1036,6 +1036,81 @@ async def get_scoped_usage_aggregates(
     return [dict(r) for r in rows]
 
 
+async def get_auto_routing_usage(
+    db: Database,
+    from_iso: str,
+    to_iso: str,
+    *,
+    org_id: str = "",
+    team_id: str = "",
+    user_id: str = "",
+) -> dict[str, Any]:
+    """Aggregate auto-routing usage from usage_events (requested_model_name = auto)."""
+    clauses = [
+        "requested_model_name = 'auto'",
+        "created_at >= ?",
+        "created_at < ?",
+        "status_code >= 200",
+        "status_code < 300",
+    ]
+    params: list[Any] = [from_iso, to_iso]
+    if org_id:
+        clauses.append("org_id = ?")
+        params.append(org_id)
+    if team_id:
+        clauses.append("team_id = ?")
+        params.append(team_id)
+    if user_id:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    where = " AND ".join(clauses)
+
+    totals_row = await db.fetchone(
+        f"""SELECT COUNT(*) AS total_requests,
+                   COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                   COALESCE(SUM(cost_estimate), 0) AS cost_estimate
+            FROM usage_events WHERE {where}""",
+        tuple(params),
+    )
+    totals = dict(totals_row) if totals_row else {}
+
+    by_user_model_rows = await db.fetchall(
+        f"""SELECT COALESCE(org_id, '') AS org_id,
+                   COALESCE(user_id, '') AS user_id,
+                   model_name AS routed_model,
+                   COUNT(*) AS total_requests,
+                   COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                   COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                   COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                   COALESCE(SUM(cost_estimate), 0) AS cost_estimate
+            FROM usage_events WHERE {where}
+            GROUP BY org_id, user_id, model_name
+            ORDER BY total_tokens DESC""",
+        tuple(params),
+    )
+
+    by_model_rows = await db.fetchall(
+        f"""SELECT model_name AS routed_model,
+                   COUNT(*) AS total_requests,
+                   COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                   COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                   COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                   COALESCE(SUM(cost_estimate), 0) AS cost_estimate
+            FROM usage_events WHERE {where}
+            GROUP BY model_name
+            ORDER BY total_tokens DESC""",
+        tuple(params),
+    )
+
+    return {
+        "total_requests": int(totals.get("total_requests") or 0),
+        "total_tokens": int(totals.get("total_tokens") or 0),
+        "cost_estimate": float(totals.get("cost_estimate") or 0),
+        "by_user_model": [dict(r) for r in by_user_model_rows],
+        "by_model": [dict(r) for r in by_model_rows],
+    }
+
+
 async def get_monthly_token_usage(db: Database, org_id: str) -> int:
     start = datetime.now(timezone.utc).replace(
         day=1, hour=0, minute=0, second=0, microsecond=0,
