@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from wai.proxy.auto_router import (
+    COMPLEX_MODE_FIXED,
     annotate_candidate,
     extract_prompt_signals,
     fallback_pick,
@@ -48,7 +49,13 @@ def test_complex_prefers_stronger_not_default():
             ]
         }
     )
-    decision = heuristic_route(signals, _pool(), default_model=DEFAULT)
+    decision = heuristic_route(
+        signals,
+        _pool(),
+        default_model=DEFAULT,
+        complex_mode=COMPLEX_MODE_FIXED,
+        complex_model="gpt-4o-azure",
+    )
     assert decision is not None
     assert decision.model_name == "gpt-4o-azure"
     assert "complex" in decision.detail
@@ -74,15 +81,39 @@ def test_vision_prefers_vision_name():
     assert decision.model_name == "gpt-4o-azure"
 
 
-def test_unclear_returns_none_for_classifier():
-    # Mid-length non-code chat without strong complexity keywords
+def test_unclear_non_complex_uses_default():
     text = (
         "I'm thinking about our team meeting schedule and whether we should "
         "move the weekly sync to another time that works better for everyone."
     )
     signals = extract_prompt_signals({"messages": [{"role": "user", "content": text}]})
     decision = heuristic_route(signals, _pool(), default_model=DEFAULT)
-    assert decision is None
+    assert decision is not None
+    assert decision.model_name == DEFAULT
+    assert decision.detail in {"default model", "simple prompt"}
+
+
+def test_simple_question_with_long_history_uses_default():
+    history = [
+        {"role": "user", "content": "x" * 4000},
+        {"role": "assistant", "content": "y" * 4000},
+        {"role": "user", "content": "What is 2+2?"},
+    ]
+    signals = extract_prompt_signals({"messages": history})
+    decision = heuristic_route(signals, _pool(), default_model=DEFAULT)
+    assert decision is not None
+    assert decision.model_name == DEFAULT
+    assert signals.is_complex is False
+
+
+def test_compare_approaches_in_casual_question_is_not_complex():
+    signals = extract_prompt_signals(
+        {"messages": [{"role": "user", "content": "Can you compare approaches for making tea?"}]}
+    )
+    decision = heuristic_route(signals, _pool(), default_model=DEFAULT)
+    assert signals.is_complex is False
+    assert decision is not None
+    assert decision.model_name == DEFAULT
 
 
 def test_fallback_uses_default():

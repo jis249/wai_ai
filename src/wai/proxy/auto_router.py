@@ -41,9 +41,10 @@ _CODE_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 _COMPLEX_RE = re.compile(
-    r"\b(architect|design a system|trade.?off|reason step.?by.?step|"
-    r"prove|derive|multi.?step|refactor the|migrate|production.?ready|"
-    r"security audit|root cause|compare approaches|long.?running)\b",
+    r"\b(architect(?:ure)?|design a system|system design|trade.?offs?|reason step.?by.?step|"
+    r"prove that|derive the|multi.?step (?:plan|design|migration)|refactor the entire|"
+    r"migrate (?:the |this )?(?:system|service|database|app)|production.?ready|"
+    r"security audit|root cause analysis)\b",
     re.IGNORECASE,
 )
 _SIMPLE_RE = re.compile(
@@ -117,7 +118,9 @@ class AutoRouterConfig:
 @dataclass
 class PromptSignals:
     text: str = ""
+    last_user_text: str = ""
     estimated_tokens: int = 0
+    last_user_tokens: int = 0
     has_images: bool = False
     is_code_heavy: bool = False
     is_complex: bool = False
@@ -211,6 +214,42 @@ def candidates_from_models(
     return out
 
 
+def _content_to_text(content: Any) -> tuple[str, bool]:
+    """Return text and whether the content block includes images."""
+    has_images = False
+    if isinstance(content, str):
+        return content, has_images
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = str(block.get("type", ""))
+            if btype in ("image_url", "image") or "image" in btype:
+                has_images = True
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+        return "\n".join(parts), has_images
+    return "", has_images
+
+
+def _last_user_text(envelope: dict[str, Any]) -> tuple[str, bool]:
+    messages = envelope.get("messages")
+    if isinstance(messages, list):
+        for msg in reversed(messages):
+            if not isinstance(msg, dict) or msg.get("role") != "user":
+                continue
+            return _content_to_text(msg.get("content"))
+    prompt = envelope.get("prompt")
+    if isinstance(prompt, str):
+        return prompt, False
+    input_text = envelope.get("input")
+    if isinstance(input_text, str):
+        return input_text, False
+    return "", False
+
+
 def extract_prompt_signals(envelope: dict[str, Any]) -> PromptSignals:
     parts: list[str] = []
     has_images = False
@@ -220,19 +259,11 @@ def extract_prompt_signals(envelope: dict[str, Any]) -> PromptSignals:
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
-            content = msg.get("content")
-            if isinstance(content, str):
-                parts.append(content)
-            elif isinstance(content, list):
-                for block in content:
-                    if not isinstance(block, dict):
-                        continue
-                    btype = str(block.get("type", ""))
-                    if btype in ("image_url", "image") or "image" in btype:
-                        has_images = True
-                    text = block.get("text")
-                    if isinstance(text, str):
-                        parts.append(text)
+            text, msg_images = _content_to_text(msg.get("content"))
+            if msg_images:
+                has_images = True
+            if text:
+                parts.append(text)
 
     prompt = envelope.get("prompt")
     if isinstance(prompt, str):
@@ -243,12 +274,34 @@ def extract_prompt_signals(envelope: dict[str, Any]) -> PromptSignals:
         parts.append(input_text)
 
     text = "\n".join(parts).strip()
+    last_user_text, last_user_images = _last_user_text(envelope)
+    if last_user_images:
+        has_images = True
+    last_user_text = last_user_text.strip()
+
     est = max(1, len(text) // 4) if text else 0
-    fence_count = len(_CODE_FENCE_RE.findall(text))
-    is_code = fence_count >= 1 or bool(_CODE_HINT_RE.search(text))
-    is_complex = est > 2500 or bool(_COMPLEX_RE.search(text)) or (is_code and est > 1200)
-    is_simple = (est > 0 and est < 40 and bool(_SIMPLE_RE.match(text))) or (
-        est > 0 and est < 25 and not is_code and not has_images
+    last_est = max(1, len(last_user_text) // 4) if last_user_text else 0
+
+    signal_text = last_user_text or text
+    signal_est = last_est if last_user_text else est
+
+    fence_count = len(_CODE_FENCE_RE.findall(signal_text))
+    is_code = fence_count >= 1 or bool(_CODE_HINT_RE.search(signal_text))
+    is_complex = (
+        signal_est > 900
+        or bool(_COMPLEX_RE.search(signal_text))
+        or (is_code and signal_est > 700)
+    )
+    is_simple = (
+        signal_est > 0
+        and signal_est < 40
+        and bool(_SIMPLE_RE.match(signal_text.strip()))
+    ) or (
+        signal_est > 0
+        and signal_est < 80
+        and not is_code
+        and not has_images
+        and not is_complex
     )
 
     confidence = 0.35
@@ -256,18 +309,20 @@ def extract_prompt_signals(envelope: dict[str, Any]) -> PromptSignals:
         confidence = 0.95
     elif is_complex:
         confidence = 0.85
-    elif is_code and est > 80:
+    elif is_code and signal_est > 80:
         confidence = 0.8
     elif is_simple:
         confidence = 0.75
     elif is_code:
         confidence = 0.65
-    elif est > 800:
+    elif signal_est > 800:
         confidence = 0.55
 
     return PromptSignals(
         text=text,
+        last_user_text=last_user_text,
         estimated_tokens=est,
+        last_user_tokens=last_est,
         has_images=has_images,
         is_code_heavy=is_code,
         is_complex=is_complex,
@@ -341,9 +396,8 @@ def heuristic_route(
     default_model: str,
     complex_mode: str = COMPLEX_MODE_RANDOM,
     complex_model: str = "",
-    confidence_threshold: float = 0.7,
 ) -> RoutingDecision | None:
-    """Return a decision when heuristics are confident; otherwise None."""
+    """Return a routing decision from heuristics, or None if no candidates."""
     if not candidates:
         return None
 
@@ -370,19 +424,14 @@ def heuristic_route(
         pick = max(coders or candidates, key=_strength_score)
         return RoutingDecision(pick.name, REASON_HEURISTIC, "coding task")
 
-    if signals.confidence < confidence_threshold:
-        return None
-
-    if signals.is_simple:
-        preferred = _pick_by_name(candidates, default_model)
-        pick = preferred or max(candidates, key=_cheap_score)
-        return RoutingDecision(pick.name, REASON_HEURISTIC, "simple prompt")
-
+    # Non-complex prompts always use the default model (never the complex model).
     preferred = _pick_by_name(candidates, default_model)
-    if preferred and signals.confidence >= confidence_threshold:
-        return RoutingDecision(preferred.name, REASON_HEURISTIC, "default model")
+    if preferred:
+        detail = "simple prompt" if signals.is_simple else "default model"
+        return RoutingDecision(preferred.name, REASON_HEURISTIC, detail)
 
-    return None
+    pick = max(candidates, key=_cheap_score)
+    return RoutingDecision(pick.name, REASON_HEURISTIC, "default model")
 
 
 def fallback_pick(
@@ -436,7 +485,7 @@ class AutoRouter:
             )
             return decision
 
-        if classifier_model is not None:
+        if classifier_model is not None and signals.is_complex:
             classified = await self._classify(
                 signals,
                 candidates,
@@ -464,12 +513,12 @@ class AutoRouter:
         build_headers: Any,
     ) -> RoutingDecision | None:
         names = [c.name for c in candidates]
-        summary = signals.text[:1500]
+        summary = (signals.last_user_text or signals.text)[:1500]
         system = (
-            "You are a model router. Choose the single best model for the user request "
-            "from the candidate list. Prefer the default coding model for normal coding "
-            "and chat; choose a stronger model only for complex reasoning, long context, "
-            "or architecture/design work; choose a vision-capable model if images are present. "
+            "You are a model router for complex requests only. Choose the single best model "
+            "from the candidate list for hard reasoning, architecture, long-context design, "
+            "or vision tasks. Prefer the configured complex/default coding model for normal "
+            "coding unless the task clearly needs a stronger model. "
             "Reply with ONLY the exact model name, nothing else."
         )
         user = (
