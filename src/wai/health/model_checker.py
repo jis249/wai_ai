@@ -1,4 +1,4 @@
-"""Periodic upstream health probes for configured LLM models."""
+﻿"""Periodic upstream health probes for configured LLM models."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ import httpx
 
 from wai.crypto.aes import decrypt_string
 from wai.db.connection import Database
+from wai.proxy.providers.azure import is_foundry_project_endpoint, requires_responses_api
+from wai.proxy.registry import Model
 
 
 def _utc_now_iso() -> str:
@@ -24,6 +26,7 @@ class ModelHealthChecker:
 
     INTERVAL_SECONDS = 60.0
     REQUEST_TIMEOUT = 15.0
+    FUNCTIONAL_TIMEOUT = 45.0
 
     def __init__(
         self,
@@ -86,6 +89,8 @@ class ModelHealthChecker:
                 )
 
     async def _probe_model(self, row: dict[str, Any]) -> dict[str, Any]:
+        if is_foundry_project_endpoint(row.get("base_url") or ""):
+            return await self._probe_foundry_inference(row)
         started = time.perf_counter()
         url = self._models_url(row)
         headers = self._auth_headers(row)
@@ -135,11 +140,72 @@ class ModelHealthChecker:
             last_error=last_error,
         )
 
+    async def _probe_foundry_inference(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Foundry project endpoints have no /models list; probe inference instead."""
+        started = time.perf_counter()
+        headers = self._auth_headers(row)
+        headers["Content-Type"] = "application/json"
+        name = row["name"]
+        model_id = row.get("azure_deployment") or name
+        base = (row.get("base_url") or "").rstrip("/")
+        stub = Model(name=name, azure_deployment=row.get("azure_deployment") or "")
+        if requires_responses_api(stub):
+            url = f"{base}/openai/v1/responses"
+            body = {
+                "model": model_id,
+                "input": "ping",
+                "max_output_tokens": 16,
+            }
+        else:
+            url = f"{base}/openai/v1/chat/completions"
+            body = {
+                "model": model_id,
+                "messages": [{"role": "user", "content": "ping"}],
+                "max_completion_tokens": 8,
+            }
+        try:
+            async with httpx.AsyncClient(timeout=self.FUNCTIONAL_TIMEOUT, follow_redirects=False) as client:
+                resp = await client.post(url, headers=headers, content=json.dumps(body))
+        except Exception as exc:
+            return self._build_result(
+                name,
+                status="unhealthy",
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                health_ok=False,
+                models_ok=False,
+                functional_ok=False,
+                last_error=str(exc),
+            )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        ok = 200 <= resp.status_code < 300
+        if ok:
+            return self._build_result(
+                name,
+                status="healthy",
+                latency_ms=latency_ms,
+                health_ok=True,
+                models_ok=True,
+                functional_ok=True,
+            )
+        snippet = (resp.text or "").replace("\n", " ")[:160]
+        return self._build_result(
+            name,
+            status="unhealthy",
+            latency_ms=latency_ms,
+            health_ok=resp.status_code < 500,
+            models_ok=False,
+            functional_ok=False,
+            last_error=f"upstream returned {resp.status_code}: {snippet}",
+        )
+
     def _models_url(self, row: dict[str, Any]) -> str:
         provider = row.get("provider") or ""
         if provider == "azure":
+            base = (row.get("base_url") or "").rstrip("/")
+            if is_foundry_project_endpoint(base):
+                return f"{base}/openai/v1/models"
             version = row.get("azure_api_version") or "2024-10-21"
-            return f"{(row.get('base_url') or '').rstrip('/')}/openai/models?api-version={version}"
+            return f"{base}/openai/models?api-version={version}"
         return (row.get("base_url") or "").rstrip("/") + "/models"
 
     def _auth_headers(self, row: dict[str, Any]) -> dict[str, str]:
@@ -157,7 +223,10 @@ class ModelHealthChecker:
 
         provider = row.get("provider") or ""
         if provider == "azure" and api_key:
-            return {"api-key": api_key}
+            headers = {"api-key": api_key}
+            if is_foundry_project_endpoint(row.get("base_url") or ""):
+                headers["Authorization"] = f"Bearer {api_key}"
+            return headers
         if api_key:
             return {"Authorization": f"Bearer {api_key}"}
         return {}

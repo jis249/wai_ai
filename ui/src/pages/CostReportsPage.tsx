@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+﻿import { useCallback, useMemo, useState } from 'react'
 import { PageHeader } from '../components/ui/PageHeader'
 import { StatCard } from '../components/ui/StatCard'
 import { Table } from '../components/ui/Table'
@@ -26,7 +26,7 @@ const COST_CURRENCIES = ['USD', 'INR'] as const
 
 const CURRENCY_LABELS: Record<CostCurrency, string> = {
   USD: '$ USD',
-  INR: '₹ INR',
+  INR: 'â‚¹ INR',
 }
 
 const RANGE_LABELS: Record<TimeRange, string> = {
@@ -41,18 +41,19 @@ const RANGE_DAYS: Record<TimeRange, number> = {
   '90d': 90,
 }
 
-const GPT54_PRICING = {
-  inputPer1M: 1.25,
-  outputPer1M: 10.00,
+const DEFAULT_AZURE_PRICING = {
+  inputPer1M: 1.75,
+  outputPer1M: 14.00,
 }
 
-const MODEL_PRICING: Record<string, typeof GPT54_PRICING> = {
-  'gpt-5.4': GPT54_PRICING,
+const MODEL_PRICING: Record<string, typeof DEFAULT_AZURE_PRICING> = {
+  'gpt-5.3-codex': { inputPer1M: 1.75, outputPer1M: 14.00 },
+  'gpt-6-astra': { inputPer1M: 10.00, outputPer1M: 50.00 },
 }
 
 function estimateCostFromTokens(
   usage: Pick<UsageDataPoint, 'prompt_tokens' | 'completion_tokens'>,
-  pricing: typeof GPT54_PRICING,
+  pricing: typeof DEFAULT_AZURE_PRICING,
 ): number {
   return (usage.prompt_tokens / 1_000_000) * pricing.inputPer1M +
     (usage.completion_tokens / 1_000_000) * pricing.outputPer1M
@@ -67,7 +68,7 @@ function costForModelUsage(usage: UsageDataPoint): number {
 function costForDailyUsage(usage: UsageDataPoint): number {
   return usage.cost_estimate > 0
     ? usage.cost_estimate
-    : estimateCostFromTokens(usage, GPT54_PRICING)
+    : estimateCostFromTokens(usage, DEFAULT_AZURE_PRICING)
 }
 
 function readStoredCurrency(): CostCurrency {
@@ -237,7 +238,7 @@ const dayColumns = (formatCost: (amountUsd: number) => string): Column<DayCostRo
     align: 'right',
     render: (row) => {
       if (row.change_pct === null) {
-        return <span className="text-text-tertiary">—</span>
+        return <span className="text-text-tertiary">â€”</span>
       }
       const isPositive = row.change_pct > 0
       const isNeutral = row.change_pct === 0
@@ -246,7 +247,7 @@ const dayColumns = (formatCost: (amountUsd: number) => string): Column<DayCostRo
         : isPositive
           ? 'text-error'
           : 'text-success'
-      const arrow = isNeutral ? '' : isPositive ? '▲ ' : '▼ '
+      const arrow = isNeutral ? '' : isPositive ? 'â–² ' : 'â–¼ '
       return (
         <span className={colorClass}>
           {arrow}{Math.abs(row.change_pct).toFixed(1)}%
@@ -293,7 +294,7 @@ export default function CostReportsPage() {
           d.total_requests > 0 ? cost / d.total_requests : 0,
       }
     })
-    const top = sorted[0]?.group_key ?? '—'
+    const top = sorted[0]?.group_key ?? 'â€”'
     return { totalCost: total, modelRows: rows, avgCostPerDay: avg, topModel: top }
   }, [modelUsage, range])
 
@@ -428,19 +429,19 @@ export default function CostReportsPage() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
         <StatCard
           label="Total Cost"
-          value={isModelLoading ? '—' : formatCost(totalCost)}
+          value={isModelLoading ? 'â€”' : formatCost(totalCost)}
           icon={<IconDollar />}
           iconColor="purple"
         />
         <StatCard
           label="Avg Cost / Day"
-          value={isModelLoading ? '—' : formatCost(avgCostPerDay)}
+          value={isModelLoading ? 'â€”' : formatCost(avgCostPerDay)}
           icon={<IconTrendingDown />}
           iconColor="blue"
         />
         <StatCard
           label="Top Model by Cost"
-          value={isModelLoading ? '—' : topModel}
+          value={isModelLoading ? 'â€”' : topModel}
           icon={<IconCpu />}
           iconColor="yellow"
         />

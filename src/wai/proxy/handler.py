@@ -29,6 +29,7 @@ ALLOWED_PATHS = {
     "completions",
     "embeddings",
     "models",
+    "responses",
 }
 
 ALLOWED_REQUEST_HEADERS = {
