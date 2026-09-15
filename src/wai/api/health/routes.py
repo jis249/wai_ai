@@ -10,10 +10,11 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from wai import __version__
 from wai.db.connection import Database
 
 _start_time = time.time()
-_version = "dev"
+_version = __version__
 
 
 def register_health_routes(
@@ -48,10 +49,11 @@ def register_health_routes(
     @router.get("/metrics")
     async def metrics(request: Request) -> Response:
         metrics_token = os.environ.get("WAI_METRICS_TOKEN", "")
-        if metrics_token:
-            auth = request.headers.get("Authorization", "")
-            if auth != f"Bearer {metrics_token}":
-                return Response(status_code=401)
+        if not metrics_token:
+            return Response(status_code=404)
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {metrics_token}":
+            return Response(status_code=401)
         return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     app.include_router(router)

@@ -1,7 +1,21 @@
+import { useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
+import { SIDEBAR_COLLAPSED_KEY } from '../../lib/constants'
 
 export function Shell() {
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1')
+
+  function toggle() {
+    setCollapsed((prev) => {
+      const next = !prev
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0')
+      return next
+    })
+  }
+
+  const width = collapsed ? 72 : 260
+
   return (
     <div className="min-h-screen bg-bg-primary">
       <a
@@ -10,8 +24,12 @@ export function Shell() {
       >
         Skip to content
       </a>
-      <Sidebar />
-      <main id="main-content" className="ml-[260px] max-w-[calc(100%-260px)] p-8">
+      <Sidebar collapsed={collapsed} onToggle={toggle} />
+      <main
+        id="main-content"
+        className="p-8 transition-[margin] duration-200"
+        style={{ marginLeft: width, maxWidth: `calc(100% - ${width}px)` }}
+      >
         <Outlet />
       </main>
     </div>

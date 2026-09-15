@@ -34,6 +34,7 @@ class ModelHealthChecker:
         encryption_key: bytes,
         *,
         log: logging.Logger | None = None,
+        interval_seconds: float = 60.0,
     ) -> None:
         self.db = db
         self.encryption_key = encryption_key
@@ -41,6 +42,7 @@ class ModelHealthChecker:
         self._health: dict[str, dict[str, Any]] = {}
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
+        self.interval_seconds = interval_seconds if interval_seconds > 0 else 60.0
 
     async def start(self) -> None:
         await self.probe_all()
@@ -61,7 +63,7 @@ class ModelHealthChecker:
     async def _loop(self) -> None:
         while not self._stop.is_set():
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.INTERVAL_SECONDS)
+                await asyncio.wait_for(self._stop.wait(), timeout=self.interval_seconds)
             except TimeoutError:
                 await self.probe_all()
 

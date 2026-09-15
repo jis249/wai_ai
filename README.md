@@ -24,7 +24,11 @@ This will:
 | URL | Role |
 |-----|------|
 | http://localhost:8081 | Dashboard (IIS) |
-| http://localhost:8090 | Backend API (internal) |
+| http://127.0.0.1:8090 | Backend API (loopback only) |
+
+The IIS script binds the backend to **127.0.0.1** and sets `WAI_TRUST_PROXY=true` so `X-Forwarded-For` is trusted only behind ARR. Do not set `WAI_DEV=true` on the IIS backend (that enables CORS allow-all for Vite).
+
+First-run checklist: open **http://localhost:8081/setup**.
 
 ## Local development
 
@@ -37,7 +41,11 @@ This will:
 
 - **Config file:** `wai.yaml` (or set `WAI_CONFIG`)
 - **Secrets:** `.env.local` beside the config file
-- **Environment variables:** `WAI_ADMIN_KEY`, `WAI_ENCRYPTION_KEY`, `POSTGRES_PASSWORD`
+- **Environment variables:** `WAI_ADMIN_KEY`, `WAI_ENCRYPTION_KEY`, `POSTGRES_PASSWORD`, `WAI_METRICS_TOKEN` (required to scrape `/metrics`), `WAI_TRUST_PROXY` (IIS), `WAI_DEV` (Vite only)
+
+The default Postgres DSN uses `sslmode=disable` because the database is local. Keep the DSN on loopback.
+
+Admin **session keys** (`wa_sk_…`) can call `/v1/*` so the Playground works with the login token. Treat a leaked dashboard session like a proxy API key.
 
 ## API
 
@@ -47,7 +55,8 @@ This will:
 | `POST /v1/chat/completions` | OpenAI-compatible chat proxy |
 | `POST /api/v1/auth/login` | Admin login |
 | `GET /healthz` | Liveness probe |
-| `GET /metrics` | Prometheus metrics |
+| `GET /metrics` | Prometheus metrics (requires `WAI_METRICS_TOKEN`) |
+| `GET /api/v1/setup/status` | First-run / Ollama checklist |
 
 ## Project layout
 

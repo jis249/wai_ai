@@ -389,6 +389,31 @@ function CreateMCPServerDialog({
   return (
     <Dialog open={open} onClose={handleClose} title="Add MCP Server">
       <div className="space-y-4">
+        <div className="flex flex-wrap gap-2">
+          {[
+            { name: 'Filesystem', alias: 'fs', url: 'http://127.0.0.1:7331/mcp' },
+            { name: 'PowerShell', alias: 'pwsh', url: 'http://127.0.0.1:7332/mcp' },
+            { name: 'Browser', alias: 'browser', url: 'http://127.0.0.1:7333/mcp' },
+          ].map((tpl) => (
+            <Button
+              key={tpl.alias}
+              variant="secondary"
+              size="sm"
+              type="button"
+              disabled={isPending}
+              onClick={() => {
+                setName(tpl.name)
+                setAlias(tpl.alias)
+                setUrl(tpl.url)
+              }}
+            >
+              Template: {tpl.name}
+            </Button>
+          ))}
+        </div>
+        <p className="text-xs text-text-tertiary">
+          Templates fill localhost URLs. Only enable private MCP URLs if you trust the process on this PC.
+        </p>
         {scopeOptions.length > 1 && (
           <Select
             label="Scope"

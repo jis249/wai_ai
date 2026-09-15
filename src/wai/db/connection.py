@@ -55,14 +55,23 @@ class Database:
         self.dsn = dsn or DEFAULT_PG_DSN
         self._pg_pool: Any = None
 
-    async def connect(self, *, min_size: int | None = None, max_size: int | None = None) -> None:
+    async def connect(
+        self,
+        *,
+        min_size: int | None = None,
+        max_size: int | None = None,
+        max_inactive_connection_lifetime: float | None = None,
+    ) -> None:
         try:
             import asyncpg
         except ImportError as exc:
             raise RuntimeError("PostgreSQL requires asyncpg — run: pip install asyncpg") from exc
         pool_min = 2 if min_size is None else min_size
         pool_max = 25 if max_size is None else max_size
-        self._pg_pool = await asyncpg.create_pool(self.dsn, min_size=pool_min, max_size=pool_max)
+        kwargs: dict[str, Any] = {"min_size": pool_min, "max_size": pool_max}
+        if max_inactive_connection_lifetime is not None and max_inactive_connection_lifetime > 0:
+            kwargs["max_inactive_connection_lifetime"] = max_inactive_connection_lifetime
+        self._pg_pool = await asyncpg.create_pool(self.dsn, **kwargs)
 
     async def close(self) -> None:
         if self._pg_pool is not None:

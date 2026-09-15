@@ -281,6 +281,7 @@ def _from_dict(data: dict[str, Any]) -> Config:
                 invite_window_minutes=int(rate_raw.get("invite_window_minutes") or 15),
             ),
             fallback_max_depth=int(settings_raw.get("fallback_max_depth") or 0),
+            health_check_interval_seconds=float(settings_raw.get("health_check_interval_seconds") or 60),
             auto_router=_auto_router(settings_raw.get("auto_router") or {}),
         ),
         logging=LoggingConfig(

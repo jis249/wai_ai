@@ -16,10 +16,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install
-        run: pip install -e .
+        run: pip install -e ".[dev]"
 
       - name: Import check
         run: python -c "from wai.app import create_app; from wai.config import load"
+
+      - name: Tests
+        run: pytest -q
 
   ui:
     runs-on: ubuntu-latest
@@ -36,4 +39,6 @@ jobs:
           cache-dependency-path: ui/package-lock.json
 
       - run: npm ci
+      - run: npm run lint
+      - run: npm test -- --run
       - run: npm run build

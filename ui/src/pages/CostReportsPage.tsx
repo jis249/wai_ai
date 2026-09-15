@@ -26,7 +26,7 @@ const COST_CURRENCIES = ['USD', 'INR'] as const
 
 const CURRENCY_LABELS: Record<CostCurrency, string> = {
   USD: '$ USD',
-  INR: 'â‚¹ INR',
+  INR: '₹ INR',
 }
 
 const RANGE_LABELS: Record<TimeRange, string> = {
@@ -361,7 +361,7 @@ export default function CostReportsPage() {
     <>
       <PageHeader
         title="Cost Reports"
-        description="Cost breakdown and trends across models"
+        description="Cloud-model cost estimates. Local/Ollama traffic is usually $0 — use token budgets on the dashboard as the primary cap."
       />
 
       {/* Time range pills + export */}
@@ -429,19 +429,19 @@ export default function CostReportsPage() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
         <StatCard
           label="Total Cost"
-          value={isModelLoading ? 'â€”' : formatCost(totalCost)}
+          value={isModelLoading ? '—' : formatCost(totalCost)}
           icon={<IconDollar />}
           iconColor="purple"
         />
         <StatCard
           label="Avg Cost / Day"
-          value={isModelLoading ? 'â€”' : formatCost(avgCostPerDay)}
+          value={isModelLoading ? '—' : formatCost(avgCostPerDay)}
           icon={<IconTrendingDown />}
           iconColor="blue"
         />
         <StatCard
           label="Top Model by Cost"
-          value={isModelLoading ? 'â€”' : topModel}
+          value={isModelLoading ? '—' : topModel}
           icon={<IconCpu />}
           iconColor="yellow"
         />

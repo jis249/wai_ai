@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react'
 import { PageHeader } from '../components/ui/PageHeader'
 import { StatCard } from '../components/ui/StatCard'
+import { useQuery } from '@tanstack/react-query'
+import apiClient from '../api/client'
 import { useMe } from '../hooks/useMe'
 import { useSystemUsage } from '../hooks/useSystemUsage'
 import type { SystemStorageInfo } from '../hooks/useSystemUsage'
@@ -92,6 +94,25 @@ function StorageRow({ disk }: { disk: SystemStorageInfo }) {
 export default function SystemUsagePage() {
   const { data: me } = useMe()
   const { data, isLoading, error } = useSystemUsage(me?.is_system_admin === true)
+  const ollama = useQuery({
+    queryKey: ['system-ollama'],
+    queryFn: () => apiClient<{ ok: boolean; base_url: string; models: string[]; loaded: string[]; error?: string }>('/system/ollama'),
+    enabled: me?.is_system_admin === true,
+    refetchInterval: 20_000,
+  })
+  const ops = useQuery({
+    queryKey: ['system-ops'],
+    queryFn: () =>
+      apiClient<{
+        autostart_task: string
+        backend_error_log_tail: string
+        backup_hint: string
+        config_path: string
+        database_dsn_redacted: string
+      }>('/system/ops'),
+    enabled: me?.is_system_admin === true,
+    refetchInterval: 30_000,
+  })
 
   if (me && !me.is_system_admin) {
     return (
@@ -207,6 +228,37 @@ export default function SystemUsagePage() {
               ? data?.storage.map((disk) => <StorageRow key={disk.name} disk={disk} />)
               : <p className="text-sm text-text-tertiary">Storage inventory unavailable.</p>}
           </div>
+        </Section>
+
+        <Section title="Ollama">
+          {ollama.data ? (
+            <div className="space-y-2 text-sm">
+              <Info label="Endpoint" value={ollama.data.base_url} monospace />
+              <Info label="Reachable" value={ollama.data.ok ? 'yes' : ollama.data.error || 'no'} />
+              <Info label="Installed models" value={ollama.data.models.join(', ') || 'none'} />
+              <Info label="Loaded now" value={ollama.data.loaded.join(', ') || 'none'} />
+            </div>
+          ) : (
+            <p className="text-sm text-text-tertiary">Checking Ollama…</p>
+          )}
+        </Section>
+
+        <Section title="Autostart and backup">
+          {ops.data ? (
+            <div className="space-y-2 text-sm">
+              <Info label="Scheduled task" value={ops.data.autostart_task} />
+              <Info label="Config" value={ops.data.config_path} monospace />
+              <Info label="Database" value={ops.data.database_dsn_redacted || '—'} monospace />
+              <p className="text-xs text-text-tertiary">{ops.data.backup_hint}</p>
+              {ops.data.backend_error_log_tail && (
+                <pre className="mt-2 max-h-48 overflow-auto rounded-md border border-border bg-bg-primary p-3 text-[11px] text-text-tertiary whitespace-pre-wrap">
+                  {ops.data.backend_error_log_tail}
+                </pre>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-text-tertiary">Loading ops status…</p>
+          )}
         </Section>
 
         <Section title="Configuration">

@@ -26,8 +26,10 @@ if ($listening) {
     exit 0
 }
 
-$env:WAI_DEV = "true"
-$args = @("-m", "wai", "--config", $Config, "--host", "0.0.0.0", "--port", "$Port")
+# Production / IIS: do not enable WAI_DEV (that opens CORS allow-all).
+# Honor X-Forwarded-For from IIS ARR only.
+$env:WAI_TRUST_PROXY = "true"
+$args = @("-m", "wai", "--config", $Config, "--host", "127.0.0.1", "--port", "$Port")
 
 if ($Detached) {
     $backendLog = Join-Path $DataDir "wai-backend.log"

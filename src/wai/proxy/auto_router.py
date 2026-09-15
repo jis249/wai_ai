@@ -6,10 +6,12 @@ models (same access rules as explicit model names).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import random
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -455,6 +457,8 @@ class AutoRouter:
     ) -> None:
         self.config = config or AutoRouterConfig()
         self.log = log or logging.getLogger("wai.auto_router")
+        self._decision_cache: dict[str, tuple[float, RoutingDecision]] = {}
+        self._cache_ttl = 60.0
 
     async def route(
         self,
@@ -469,6 +473,17 @@ class AutoRouter:
             raise ValueError("no accessible models available for auto routing")
 
         signals = extract_prompt_signals(envelope)
+        cache_key = ""
+        if not signals.has_images:
+            names = ",".join(sorted(c.name for c in candidates))
+            digest = hashlib.sha256(
+                f"{(signals.last_user_text or signals.text)[:800]}|{names}|{self.config.default_model}|{self.config.complex_mode}|{self.config.complex_model}".encode()
+            ).hexdigest()
+            cache_key = digest
+            hit = self._decision_cache.get(digest)
+            if hit and (time.monotonic() - hit[0]) < self._cache_ttl:
+                return hit[1]
+
         decision = heuristic_route(
             signals,
             candidates,
@@ -483,6 +498,7 @@ class AutoRouter:
                 decision.detail,
                 signals.estimated_tokens,
             )
+            self._remember(cache_key, decision)
             return decision
 
         if classifier_model is not None and signals.is_complex:
@@ -495,13 +511,25 @@ class AutoRouter:
             )
             if classified:
                 self.log.info("auto route classifier model=%s", classified.model_name)
+                self._remember(cache_key, classified)
                 return classified
 
-        return fallback_pick(
+        picked = fallback_pick(
             candidates,
             self.config.default_model,
             "heuristic unclear; classifier unavailable",
         )
+        self._remember(cache_key, picked)
+        return picked
+
+    def _remember(self, cache_key: str, decision: RoutingDecision) -> None:
+        if not cache_key:
+            return
+        self._decision_cache[cache_key] = (time.monotonic(), decision)
+        if len(self._decision_cache) > 512:
+            oldest = sorted(self._decision_cache.items(), key=lambda item: item[1][0])[:64]
+            for key, _ in oldest:
+                self._decision_cache.pop(key, None)
 
     async def _classify(
         self,

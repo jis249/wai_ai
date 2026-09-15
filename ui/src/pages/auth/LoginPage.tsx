@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { FormEvent } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
@@ -138,6 +138,9 @@ export default function LoginPage() {
             </a>
           </>
         )}
+        <p className="mt-6 text-center text-xs text-text-tertiary">
+          First-time install? <Link to="/setup" className="text-accent no-underline hover:underline">Open setup checklist</Link>
+        </p>
       </div>
     </div>
   )

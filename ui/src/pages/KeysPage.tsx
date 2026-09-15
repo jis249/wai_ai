@@ -21,6 +21,7 @@ import { useTeams } from '../hooks/useTeams'
 import { useServiceAccounts } from '../hooks/useServiceAccounts'
 import { useToast } from '../hooks/useToast'
 import apiClient from '../api/client'
+import { PROXY_PUBLIC_BASE } from '../lib/constants'
 
 // ---------------------------------------------------------------------------
 // Module-level constants
@@ -635,6 +636,19 @@ function KeyCreatedDialog({ keyValue, onClose }: KeyCreatedDialogProps) {
           <CopyButton text={keyValue ?? ''} label="Copy Key" copiedLabel="Copied!" />
           <Button onClick={onClose}>Done</Button>
         </div>
+        {keyValue && (
+          <div className="rounded-lg border border-border bg-bg-tertiary/40 p-3 space-y-2">
+            <p className="text-xs font-medium text-text-primary">Connect Cursor</p>
+            <p className="text-xs text-text-secondary">
+              OpenAI Base URL: <span className="font-mono">{PROXY_PUBLIC_BASE}</span>
+            </p>
+            <CopyButton text={PROXY_PUBLIC_BASE} label="Copy base URL" copiedLabel="Copied!" />
+            <pre className="text-[11px] overflow-x-auto text-text-tertiary whitespace-pre-wrap">{`{
+  "openaiApiBase": "${PROXY_PUBLIC_BASE}",
+  "openaiApiKey": "${keyValue}"
+}`}</pre>
+          </div>
+        )}
       </div>
     </Dialog>
   )
@@ -989,7 +1003,7 @@ export default function KeysPage() {
     <>
       <PageHeader
         title="API Keys"
-        description="Manage your API keys"
+        description="Manage your API keys. Use http://localhost:8081/v1 as the OpenAI-compatible base URL in Cursor, Continue, or the OpenAI SDK."
         actions={
           <Button onClick={() => setShowCreateDialog(true)}>Create Key</Button>
         }

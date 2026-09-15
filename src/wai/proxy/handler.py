@@ -12,6 +12,7 @@ from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 
 from wai.api.admin.common import KEY_INFO_CTX, KeyInfo, api_error
+from wai.metrics import observe_proxy_request
 from wai.proxy.access import AliasCache, ModelAccessCache
 from wai.proxy.auto_router import (
     AUTO_MODEL_NAME,
@@ -22,6 +23,13 @@ from wai.proxy.auto_router import (
 )
 from wai.proxy.providers import get_adapter
 from wai.proxy.registry import ERR_MODEL_NOT_FOUND, Model, Registry
+from wai.proxy.routing import (
+    RETRYABLE_STATUS,
+    apply_deployment,
+    fallback_depth_limit,
+    select_deployment,
+    walk_fallback_names,
+)
 from wai.usage.event import UsageEvent, UsageInfo, extract_usage, observe_stream_usage_line
 
 ALLOWED_PATHS = {
@@ -71,6 +79,7 @@ class ProxyHandler:
         max_response_body: int = 50 * 1024 * 1024,
         max_stream_duration: float = 300.0,
         auto_router_config: AutoRouterConfig | None = None,
+        fallback_max_depth: int = 0,
     ) -> None:
         self.registry = registry
         self.access_cache = access_cache
@@ -80,6 +89,7 @@ class ProxyHandler:
         self.max_request_body = max_request_body
         self.max_response_body = max_response_body
         self.max_stream_duration = max_stream_duration
+        self.fallback_max_depth = fallback_max_depth
         self.auto_router = AutoRouter(auto_router_config or AutoRouterConfig(), log=self.log)
         self._client = httpx.AsyncClient(
             follow_redirects=False,
@@ -127,14 +137,74 @@ class ProxyHandler:
         else:
             model = self._resolve_model(key_info, model_name)
 
+        extra_headers = routing.as_headers(requested_model_name) if routing else {}
+        chain = walk_fallback_names(
+            model,
+            lambda name: self._resolve_model(key_info, name),
+            max_depth=fallback_depth_limit(self.fallback_max_depth),
+        )
+        last_exc: Exception | None = None
+        for idx, candidate in enumerate(chain):
+            deployed = apply_deployment(candidate, select_deployment(candidate))
+            retries = max(int(candidate.max_retries or 0), 0)
+            attempts = retries + 1
+            for attempt in range(attempts):
+                try:
+                    return await self._forward(
+                        request,
+                        body=body,
+                        model=deployed,
+                        original_model_name=model_name,
+                        stream=stream,
+                        upstream_path=upstream_path,
+                        key_info=key_info,
+                        requested_model_name=requested_model_name,
+                        started=started,
+                        extra_headers=extra_headers,
+                    )
+                except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+                    last_exc = exc
+                    self.log.warning(
+                        "upstream error model=%s attempt=%s: %s",
+                        deployed.name,
+                        attempt + 1,
+                        exc,
+                    )
+                    observe_proxy_request(
+                        model=deployed.name,
+                        status_code=502,
+                        duration_seconds=time.perf_counter() - started,
+                        error=True,
+                    )
+                    continue
+            if idx < len(chain) - 1:
+                self.log.info("falling back from %s to %s", candidate.name, chain[idx + 1].name)
+
+        raise api_error(502, "bad_gateway", str(last_exc) if last_exc else "upstream unavailable")
+
+    async def _forward(
+        self,
+        request: Request,
+        *,
+        body: bytes,
+        model: Model,
+        original_model_name: str,
+        stream: bool,
+        upstream_path: str,
+        key_info: KeyInfo | None,
+        requested_model_name: str,
+        started: float,
+        extra_headers: dict[str, str],
+    ) -> Response:
         adapter = get_adapter(model.provider)
-        needs_model_replace = model_name != model.name or routing is not None
+        needs_model_replace = original_model_name != model.name
         needs_stream_opts = stream
+        fwd_body = body
         if needs_model_replace or needs_stream_opts:
-            body = mutate_request_body(body, model.name, needs_stream_opts)
+            fwd_body = mutate_request_body(body, model.name, needs_stream_opts)
 
         if adapter is not None:
-            body = adapter.transform_request(body, model)
+            fwd_body = adapter.transform_request(fwd_body, model)
 
         if adapter is not None:
             upstream_url = adapter.transform_url(model.base_url, upstream_path, model)
@@ -144,14 +214,13 @@ class ProxyHandler:
         headers = self._build_upstream_headers(request, model, adapter)
         method = request.method.upper()
         request_id = getattr(request.state, "request_id", "") or ""
-        extra_headers = routing.as_headers(requested_model_name) if routing else {}
 
         if stream:
             return await self._stream_response(
                 method,
                 upstream_url,
                 headers,
-                body,
+                fwd_body,
                 adapter,
                 key_info=key_info,
                 model=model,
@@ -161,20 +230,30 @@ class ProxyHandler:
                 extra_headers=extra_headers,
             )
 
-        resp = await self._client.request(method, upstream_url, content=body, headers=headers)
+        resp = await self._client.request(method, upstream_url, content=fwd_body, headers=headers)
+        if resp.status_code in RETRYABLE_STATUS:
+            observe_proxy_request(
+                model=model.name,
+                status_code=resp.status_code,
+                duration_seconds=time.perf_counter() - started,
+                error=True,
+            )
+            raise httpx.HTTPStatusError("retryable upstream status", request=resp.request, response=resp)
+
         content = resp.content
         if len(content) > self.max_response_body:
             raise api_error(502, "bad_gateway", "upstream response too large")
         if adapter is not None:
             content = adapter.transform_response(content)
 
+        duration_s = time.perf_counter() - started
         if (
             self.usage_logger is not None
             and key_info is not None
             and upstream_path in {"chat/completions", "completions", "embeddings"}
             and 200 <= resp.status_code < 300
         ):
-            duration_ms = int((time.perf_counter() - started) * 1000)
+            duration_ms = int(duration_s * 1000)
             usage = extract_usage(content)
             self._log_usage(
                 key_info,
@@ -185,6 +264,20 @@ class ProxyHandler:
                 status_code=resp.status_code,
                 request_id=request_id,
                 requested_model_name=requested_model_name,
+            )
+            observe_proxy_request(
+                model=model.name,
+                status_code=resp.status_code,
+                duration_seconds=duration_s,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+            )
+        else:
+            observe_proxy_request(
+                model=model.name,
+                status_code=resp.status_code,
+                duration_seconds=duration_s,
+                error=resp.status_code >= 400,
             )
 
         out_headers = self._filter_response_headers(resp.headers)

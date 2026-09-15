@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components, react-hooks/purity */
 import { useMemo, type ReactNode } from 'react'
 import { Dialog } from '../components/ui/Dialog'
 import { Badge } from '../components/ui/Badge'

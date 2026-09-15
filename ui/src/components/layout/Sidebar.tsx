@@ -241,6 +241,7 @@ function buildNavigation(): NavGroup[] {
         { label: 'Users', path: '/users', icon: <IconPersonPlus /> },
         { label: 'System Usage', path: '/system-usage', icon: <IconServer /> },
         { label: 'Auto routing', path: '/auto-routing', icon: <IconRoute /> },
+        { label: 'Setup', path: '/setup', icon: <IconPlug /> },
       ],
     },
   ]
@@ -265,7 +266,7 @@ function LockIcon() {
   )
 }
 
-export function Sidebar() {
+export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?: () => void }) {
   const { data } = useMe()
   const queryClient = useQueryClient()
 
@@ -285,14 +286,22 @@ export function Sidebar() {
   return (
     <aside
       aria-label="Main navigation"
-      className="w-[260px] bg-bg-secondary/95 border-r border-border flex flex-col fixed h-screen z-50 shadow-[var(--shadow-sidebar)]"
+      className={`${collapsed ? 'w-[72px]' : 'w-[260px]'} bg-bg-secondary/95 border-r border-border flex flex-col fixed h-screen z-50 shadow-[var(--shadow-sidebar)] transition-[width] duration-200`}
     >
       {/* Logo */}
-      <div className="px-4 py-4 border-b border-border shrink-0">
-        <a href="/" className="flex items-center gap-2 no-underline">
+      <div className="px-4 py-4 border-b border-border shrink-0 flex items-center justify-between gap-2">
+        <Link to="/" className="flex items-center gap-2 no-underline min-w-0">
           <img src="/logo.svg" alt="wai" className="h-7 w-7" />
-          <span className="gradient-text text-xl font-bold">wai</span>
-        </a>
+          {!collapsed && <span className="gradient-text text-xl font-bold">wai</span>}
+        </Link>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="text-text-tertiary hover:text-text-primary p-1 rounded-md"
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {collapsed ? '»' : '«'}
+        </button>
       </div>
 
       {/* Navigation */}
@@ -302,7 +311,7 @@ export function Sidebar() {
               {groupIndex > 0 && (
                 <div className="h-px bg-border my-2" />
               )}
-              {group.label && (
+              {group.label && !collapsed && (
                 <div className="text-[11px] uppercase tracking-wider text-text-tertiary/50 px-3 mb-1 mt-1">
                   {group.label}
                 </div>
@@ -315,8 +324,8 @@ export function Sidebar() {
                     className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm opacity-50 hover:opacity-70 transition-opacity"
                   >
                     {item.icon}
-                    <span className="flex-1">{item.label}</span>
-                    <LockIcon />
+                    {!collapsed && <span className="flex-1">{item.label}</span>}
+                    {!collapsed && <LockIcon />}
                   </NavLink>
                 ) : (
                   <NavLink
@@ -331,9 +340,10 @@ export function Sidebar() {
                           : 'text-text-secondary hover:bg-bg-tertiary hover:text-text-primary',
                       ].join(' ')
                     }
+                    title={item.label}
                   >
                     {item.icon}
-                    <span className="flex-1">{item.label}</span>
+                    {!collapsed && <span className="flex-1">{item.label}</span>}
                   </NavLink>
                 )
               )}
@@ -342,6 +352,7 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
+      {!collapsed && (
       <div className="shrink-0 border-t border-border p-3 space-y-3">
         <ThemeToggle compact />
         <div className="flex items-center justify-between">
@@ -373,6 +384,7 @@ export function Sidebar() {
           </button>
         </div>
       </div>
+      )}
     </aside>
   )
 }

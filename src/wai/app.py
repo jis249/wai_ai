@@ -81,6 +81,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
         await db.connect(
             min_size=min(5, cfg.database.max_open_conns),
             max_size=cfg.database.max_open_conns,
+            max_inactive_connection_lifetime=cfg.database.conn_max_lifetime.total_seconds(),
         )
         await run_migrations(db, logger)
 
@@ -109,10 +110,13 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
         await reload_access_cache(db, access_cache)
 
         rate_limiter = RateLimiter(db, log=logger)
+        await rate_limiter.start()
         brute_force = BruteForceGuard(db, cfg.settings.rate_limit, log=logger)
         audit_logger = AuditLogger(db, log=logger)
         await audit_logger.start()
         app.state.audit_logger = audit_logger
+
+        from wai.updates import UpdateChecker
 
         handler = init_handler(
             db,
@@ -123,6 +127,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
             rate_limiter=rate_limiter,
             brute_force=brute_force,
             audit_logger=audit_logger,
+            update_checker=UpdateChecker(),
         )
         await handler.seed_key_cache()
         await reload_admin_model_registry(handler)
@@ -140,7 +145,12 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
         state["access_cache"] = access_cache
         state["alias_cache"] = await load_alias_cache(db)
 
-        health_checker = ModelHealthChecker(db, enc_key, log=logger)
+        health_checker = ModelHealthChecker(
+            db,
+            enc_key,
+            log=logger,
+            interval_seconds=float(getattr(cfg.settings, "health_check_interval_seconds", 60) or 60),
+        )
         await health_checker.start()
         handler.health_checker = health_checker
         state["health_checker"] = health_checker
@@ -165,6 +175,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
             max_response_body=cfg.server.proxy.max_response_body,
             max_stream_duration=cfg.server.proxy.max_stream_duration.total_seconds(),
             auto_router_config=auto_cfg,
+            fallback_max_depth=cfg.settings.fallback_max_depth,
         )
 
         if not state["routes_registered"]:
@@ -190,6 +201,10 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
         audit = getattr(app.state, "audit_logger", None)
         if audit is not None:
             await audit.stop()
+        await rate_limiter.stop()
+        mcp_client = getattr(handler, "_mcp_client", None)
+        if mcp_client is not None:
+            await mcp_client.aclose()
         if state["proxy_handler"]:
             await state["proxy_handler"].close()
         await db.close()
@@ -204,7 +219,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
     if dev_mode:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
             allow_methods=["*"],
             allow_headers=["*"],
         )
@@ -235,6 +250,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
                     alias_cache=state["alias_cache"],
                     usage_logger=state.get("usage_logger"),
                     auto_router_config=auto_cfg,
+                    fallback_max_depth=cfg.settings.fallback_max_depth,
                 )
                 state["proxy_handler"] = ph
                 app.state.proxy_handler = ph

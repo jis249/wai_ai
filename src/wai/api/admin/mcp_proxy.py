@@ -61,11 +61,14 @@ async def handle_mcp_proxy(alias: str, request: Request, key_info: KeyInfo) -> R
     body = await request.body()
     start = time.time()
     try:
-        async with httpx.AsyncClient(timeout=h.mcp_call_timeout) as client:
-            headers = {"Content-Type": "application/json"}
-            if request.headers.get("mcp-session-id"):
-                headers["Mcp-Session-Id"] = request.headers["mcp-session-id"]
-            upstream = await client.post(server["url"], content=body, headers=headers)
+        client = h._mcp_client
+        if client is None:
+            client = httpx.AsyncClient(timeout=h.mcp_call_timeout)
+            h._mcp_client = client
+        headers = {"Content-Type": "application/json"}
+        if request.headers.get("mcp-session-id"):
+            headers["Mcp-Session-Id"] = request.headers["mcp-session-id"]
+        upstream = await client.post(server["url"], content=body, headers=headers)
         duration_ms = int((time.time() - start) * 1000)
         # Log usage asynchronously (fire-and-forget)
         try:

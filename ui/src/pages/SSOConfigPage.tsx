@@ -211,9 +211,12 @@ export default function SSOConfigPage() {
     <>
       <PageHeader
         title="SSO Configuration"
-        description="Manage OIDC single sign-on settings globally and per organization"
+        description="Org SSO records can be stored, but global OIDC login is only active when a provider is configured in the backend."
       />
       <div className="max-w-3xl space-y-6">
+        <div className="rounded-lg border border-border bg-bg-secondary p-4 text-sm text-text-secondary">
+          Until OIDC is wired, use local email/password login. The login page hides SSO when it is disabled.
+        </div>
         <GlobalSSOCard />
         <OrgSSOLinksCard />
       </div>

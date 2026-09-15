@@ -38,11 +38,13 @@ import SystemUsersPage from './pages/SystemUsersPage'
 import MCPServersPage from './pages/MCPServersPage'
 import SystemUsagePage from './pages/SystemUsagePage'
 import AutoRoutingPage from './pages/AutoRoutingPage'
+import SetupPage from './pages/SetupPage'
 import { ToastProvider } from './hooks/useToast'
 import { ThemeProvider } from './hooks/useTheme'
 import { Shell } from './components/layout/Shell'
-import { PageHeader } from './components/ui/PageHeader'
+import { NotFoundPage } from './components/NotFoundPage'
 import { LOCAL_STORAGE_KEY } from './lib/constants'
+import { useMe } from './hooks/useMe'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -53,21 +55,24 @@ const queryClient = new QueryClient({
   },
 })
 
-function PlaceholderPage({ title, description }: { title: string; description?: string }) {
-  return (
-    <>
-      <PageHeader title={title} description={description} />
-      <div className="rounded-lg border border-border bg-bg-secondary p-12 text-center">
-        <p className="text-sm text-text-tertiary">Coming soon</p>
-      </div>
-    </>
-  )
-}
-
 function RequireAuth() {
   const token = localStorage.getItem(LOCAL_STORAGE_KEY)
   if (!token) return <Navigate to="/login" replace />
   return <Shell />
+}
+
+function HomeRoute() {
+  const { data, isLoading } = useMe()
+  if (isLoading) return null
+  if (data?.role === 'member') return <Navigate to="/playground" replace />
+  return <DashboardPage />
+}
+
+function OrgIndexRedirect() {
+  const { data, isLoading } = useMe()
+  if (isLoading) return null
+  const isOrgAdmin = data?.role === 'org_admin' || data?.role === 'system_admin'
+  return <Navigate to={isOrgAdmin ? 'users' : 'settings'} replace />
 }
 
 export default function App() {
@@ -80,8 +85,9 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/auth/callback" element={<CallbackPage />} />
             <Route path="/invite/:token" element={<AcceptInvitePage />} />
+            <Route path="/setup" element={<SetupPage />} />
             <Route element={<RequireAuth />}>
-              <Route index element={<DashboardPage />} />
+              <Route index element={<HomeRoute />} />
               <Route path="playground" element={<PlaygroundPage />} />
               <Route path="keys" element={<KeysPage />} />
               <Route path="teams" element={<TeamsPage />} />
@@ -93,7 +99,7 @@ export default function App() {
                 <Route path="settings" element={<TeamSettingsTab />} />
               </Route>
               <Route path="org" element={<OrganizationPage />}>
-                <Route index element={<Navigate to="users" replace />} />
+                <Route index element={<OrgIndexRedirect />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="users" element={<OrgUsersPage />} />
                 <Route path="models" element={<ModelsAccessTab />} />
@@ -123,15 +129,7 @@ export default function App() {
               </Route>
               <Route path="users" element={<SystemUsersPage />} />
               <Route path="mcp-servers" element={<MCPServersPage />} />
-              <Route
-                path="*"
-                element={
-                  <PlaceholderPage
-                    title="Not Found"
-                    description="This page does not exist."
-                  />
-                }
-              />
+              <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

@@ -1,6 +1,8 @@
 export const LOCAL_STORAGE_KEY = 'wai_session'
 export const THEME_STORAGE_KEY = 'wai_theme'
 export const COST_CURRENCY_STORAGE_KEY = 'wai_cost_currency'
+export const SIDEBAR_COLLAPSED_KEY = 'wai_sidebar_collapsed'
+export const PROXY_PUBLIC_BASE = 'http://localhost:8081/v1'
 
 /** Fixed USD → INR rate for cost report display (amounts are stored in USD). */
 export const USD_TO_INR_RATE = 83

@@ -1,7 +1,8 @@
-"""PostgreSQL-backed rate limiting (works across load-balanced instances)."""
+"""PostgreSQL-backed rate limiting with an in-process window for the hot path."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -31,11 +32,31 @@ def _month_window() -> str:
 
 
 class RateLimiter:
-    """Enforces per-key/team/org request and token limits using shared DB counters."""
+    """Enforces per-key/team/org request and token limits using local counters flushed to the DB."""
+
+    _FLUSH_SECONDS = 2.0
 
     def __init__(self, db: Database, *, log: logging.Logger | None = None) -> None:
         self._db = db
         self._log = log or logging.getLogger("wai.ratelimit")
+        self._local: dict[tuple[str, str, str, str], int] = {}
+        self._pending: dict[tuple[str, str, str, str], int] = {}
+        self._lock = asyncio.Lock()
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+
+    async def start(self) -> None:
+        self._task = asyncio.create_task(self._flush_loop(), name="rate-limit-flush")
+
+    async def stop(self) -> None:
+        self._stop.set()
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        await self._flush_now()
 
     async def check_proxy_request(self, key_info: KeyInfo) -> None:
         """Raise limit_reached when any configured scope exceeds its request rate."""
@@ -92,15 +113,38 @@ class RateLimiter:
                     raise limit_reached("monthly token limit exceeded")
 
     async def _increment(self, scope_type: str, scope_id: str, window_type: str, window_start: str) -> int:
-        row = await self._db.fetchone(
-            """INSERT INTO rate_limit_counters (scope_type, scope_id, window_type, window_start, request_count)
-               VALUES (?, ?, ?, ?, 1)
-               ON CONFLICT (scope_type, scope_id, window_type, window_start)
-               DO UPDATE SET request_count = rate_limit_counters.request_count + 1
-               RETURNING request_count""",
-            (scope_type, scope_id, window_type, window_start),
-        )
-        return int(row["request_count"]) if row else 1
+        key = (scope_type, scope_id, window_type, window_start)
+        async with self._lock:
+            count = self._local.get(key, 0) + 1
+            self._local[key] = count
+            self._pending[key] = self._pending.get(key, 0) + 1
+            if len(self._local) > 8000:
+                keep = _minute_window()
+                self._local = {k: v for k, v in self._local.items() if k[2] != "minute" or k[3] >= keep}
+        return count
+
+    async def _flush_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=self._FLUSH_SECONDS)
+            except TimeoutError:
+                await self._flush_now()
+
+    async def _flush_now(self) -> None:
+        async with self._lock:
+            pending = self._pending
+            self._pending = {}
+        for (scope_type, scope_id, window_type, window_start), n in pending.items():
+            try:
+                await self._db.execute(
+                    """INSERT INTO rate_limit_counters (scope_type, scope_id, window_type, window_start, request_count)
+                       VALUES (?, ?, ?, ?, ?)
+                       ON CONFLICT (scope_type, scope_id, window_type, window_start)
+                       DO UPDATE SET request_count = rate_limit_counters.request_count + ?""",
+                    (scope_type, scope_id, window_type, window_start, n, n),
+                )
+            except Exception as exc:
+                self._log.warning("rate limit flush failed: %s", exc)
 
     async def _sum_hourly_tokens(self, scope_type: str, scope_id: str, since_bucket: str) -> int:
         col = {"key": "key_id", "team": "team_id", "org": "org_id"}.get(scope_type)

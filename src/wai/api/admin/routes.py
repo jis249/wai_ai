@@ -23,6 +23,7 @@ from wai.api.admin import (
     org_sso,
     orgs,
     service_accounts,
+    setup,
     system,
     team_memberships,
     teams,
@@ -46,6 +47,7 @@ def create_admin_router() -> APIRouter:
     public.add_api_route(f"{API_PREFIX}/auth/providers", auth.auth_providers, methods=["GET"], tags=["auth"])
     public.add_api_route(f"{API_PREFIX}/invites/peek", invites.peek_invite, methods=["GET"], tags=["invites"])
     public.add_api_route(f"{API_PREFIX}/invites/redeem", invites.redeem_invite, methods=["POST"], tags=["invites"])
+    public.add_api_route(f"{API_PREFIX}/setup/status", setup.setup_status, methods=["GET"], tags=["setup"])
 
     h = get_handler()
     if h.sso_provider is not None:
@@ -61,6 +63,7 @@ def create_admin_router() -> APIRouter:
     authed.add_api_route(f"{API_PREFIX}/me/available-models", auth.available_models, methods=["GET"], tags=["auth"])
     authed.include_router(dashboard.router, prefix=API_PREFIX)
     authed.include_router(system.router, prefix=API_PREFIX)
+    authed.include_router(setup.router, prefix=API_PREFIX)
     authed.include_router(usage.router, prefix=API_PREFIX)
     authed.include_router(mcp_usage.router, prefix=API_PREFIX)
     authed.include_router(audit.router, prefix=API_PREFIX)

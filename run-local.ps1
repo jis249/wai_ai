@@ -214,7 +214,7 @@ if ($BackendOnly) {
     Write-Host "API: http://localhost:$Port"
     Write-Host "Database: PostgreSQL localhost:5432/$DatabaseName"
     $env:WAI_DEV = "true"
-    & $VenvPython -m wai --config $Config --host 0.0.0.0 --port $Port
+    & $VenvPython -m wai --config $Config --host 127.0.0.1 --port $Port
     exit $LASTEXITCODE
 }
 

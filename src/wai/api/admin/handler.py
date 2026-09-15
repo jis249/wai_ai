@@ -137,6 +137,7 @@ class Handler:
         self.mcp_call_timeout = mcp_call_timeout
         self.mcp_allow_private_urls = mcp_allow_private_urls
         self._fallback_lock = False
+        self._mcp_client: Any = None
 
     async def seed_key_cache(self) -> None:
         records = await repo.load_all_active_keys(self.db)

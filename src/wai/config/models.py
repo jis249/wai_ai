@@ -142,6 +142,7 @@ class SettingsConfig:
     usage: UsageConfig = field(default_factory=UsageConfig)
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
     fallback_max_depth: int = 0
+    health_check_interval_seconds: float = 60.0
     auto_router: AutoRouterSettings = field(default_factory=AutoRouterSettings)
 
 
