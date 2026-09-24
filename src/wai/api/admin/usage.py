@@ -414,6 +414,9 @@ class RequestLogsResponse(BaseModel):
     # Cursor for the next (older) page: pass as ?before=...&before_id=...
     next_before: str = ""
     next_before_id: str = ""
+    # Newest row in this result (live-tail cursor): pass as ?after=...&after_id=...
+    latest_created_at: str = ""
+    latest_id: str = ""
 
 
 MAX_REQUEST_LOGS_LIMIT = 500
@@ -435,6 +438,8 @@ async def list_request_logs(
     limit: int = Query(50),
     before: str = Query(""),
     before_id: str = Query(""),
+    after: str = Query(""),
+    after_id: str = Query(""),
     model: str = Query(""),
     status: str = Query(""),
     key_id: str = Query(""),
@@ -482,6 +487,16 @@ async def list_request_logs(
         else:
             clauses.append("r.created_at < ?")
             params.append(before_ts)
+    if after:
+        # Live tail: strictly newer than the (created_at, id) cursor. ids are uuid7, so
+        # they increase with insert time within a shared created_at second.
+        after_ts = _log_ts(after, "after")
+        if after_id:
+            clauses.append("(r.created_at > ? OR (r.created_at = ? AND r.id > ?))")
+            params.extend([after_ts, after_ts, after_id])
+        else:
+            clauses.append("r.created_at > ?")
+            params.append(after_ts)
     params.append(limit + 1)
     fetched = await h.db.fetchall(
         f"""SELECT r.id, r.created_at, r.status_code, r.model_name, r.requested_model,
@@ -498,10 +513,13 @@ async def list_request_logs(
     has_more = len(rows) > limit
     rows = rows[:limit]
     last = rows[-1] if has_more and rows else None
+    newest = rows[0] if rows else None
     return RequestLogsResponse(
         has_more=has_more,
         next_before=(last["created_at"] if last else ""),
         next_before_id=(last["id"] if last else ""),
+        latest_created_at=(newest["created_at"] if newest else ""),
+        latest_id=(newest["id"] if newest else ""),
         data=[
             RequestLogItem(
                 id=r["id"],

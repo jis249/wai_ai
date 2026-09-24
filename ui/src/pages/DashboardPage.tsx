@@ -12,17 +12,19 @@ import { QueryState } from '../components/ui/QueryState'
 import { Skeleton } from '../components/ui/Skeleton'
 import { TimeRangePicker } from '../components/ui/TimeRangePicker'
 import {
-  Activity,
   ChartColumn,
   CircleX,
-  DollarSign,
   ExternalLink,
   HeartPulse,
   KeyRound,
   TriangleAlert,
-  Zap,
 } from '../components/ui/icons'
-import { AreaChart } from '../components/ui/charts/AreaChart'
+import { TimeSeriesChart } from '../components/ui/charts/TimeSeriesChart'
+import { DashboardKpiRow } from '../components/analytics/DashboardKpiRow'
+import { GettingStarted } from '../components/onboarding/GettingStarted'
+import { bucketRange, requestLogsUrl } from '../components/analytics/drilldown'
+import { bucketStartMs, formatBucketLabel, formatBucketTooltip } from '../components/analytics/timeSeries'
+import { useDashboardKpis } from '../hooks/useDashboardKpis'
 import { DonutChart } from '../components/ui/charts/DonutChart'
 import { HorizontalBar } from '../components/ui/charts/HorizontalBar'
 import { MiniTable } from '../components/ui/charts/MiniTable'
@@ -49,6 +51,14 @@ import {
 // BudgetWarningBanners
 // ---------------------------------------------------------------------------
 
+function budgetWarningTitle(w: BudgetWarning): string {
+  const pct = `${Math.round(w.percent_used * 100)}% used`
+  if (w.window === 'monthly_spend') {
+    return `Monthly spend budget: ${formatCost(w.usage)} / ${formatCost(w.limit)} (${pct})`
+  }
+  return `${w.window === 'daily' ? 'Daily' : 'Monthly'} token budget: ${formatNumber(w.usage)} / ${formatNumber(w.limit)} (${pct})`
+}
+
 function BudgetWarningBanners({ warnings }: { warnings: BudgetWarning[] }) {
   if (warnings.length === 0) return null
   return (
@@ -57,7 +67,7 @@ function BudgetWarningBanners({ warnings }: { warnings: BudgetWarning[] }) {
         <Banner
           key={`${w.scope}-${w.window}`}
           variant={w.percent_used > 0.9 ? 'error' : 'warning'}
-          title={`${w.window === 'daily' ? 'Daily' : 'Monthly'} token budget: ${formatNumber(w.usage)} / ${formatNumber(w.limit)} (${Math.round(w.percent_used * 100)}% used)`}
+          title={budgetWarningTitle(w)}
         />
       ))}
     </div>
@@ -261,9 +271,9 @@ export default function DashboardPage() {
     [topModels?.data, modelHealth?.models],
   )
 
-  const orgUsageSeries = useUsage(orgId, from, to, 'day', !!me && canViewOrgUsage)
-  const myUsageSeries = useMyUsage(from, to, 'day', !!me && !canViewOrgUsage)
-  const seriesQuery = canViewOrgUsage ? orgUsageSeries : myUsageSeries
+  // Requests-over-time uses the KPI series (gap-free hour/day buckets); the query is
+  // shared with the KPI row through the same query key.
+  const kpiQuery = useDashboardKpis(from, to, !!me)
 
   // Team usage (admin only)
   const teamUsageQuery = useUsage(orgId, from, to, 'team', !!me && canViewOrgUsage)
@@ -300,8 +310,10 @@ export default function DashboardPage() {
         label: m.group_key,
         value: m.total_tokens,
         detail: `${formatTokens(m.total_tokens)} Tokens`,
+        href: requestLogsUrl({ model: m.group_key, range: timeRange }),
+        linkLabel: 'view requests in request logs',
       }))
-  }, [topModels])
+  }, [topModels, timeRange])
 
   // Build donut segments from prompt/completion token split
   const donutSegments = useMemo(() => {
@@ -315,7 +327,20 @@ export default function DashboardPage() {
     ]
   }, [topModels])
 
-  const statValue = (render: () => string) => (statsLoading ? '…' : stats == null ? '—' : render())
+  const granularity = kpiQuery.data?.granularity ?? 'day'
+  const requestSeries = useMemo(() => {
+    const data = kpiQuery.data
+    if (data == null) return []
+    return data.series.map((b) => {
+      const ms = bucketStartMs(b.bucket)
+      return {
+        bucket: b.bucket,
+        label: Number.isNaN(ms) ? b.bucket : formatBucketLabel(ms, data.granularity),
+        tooltipLabel: Number.isNaN(ms) ? b.bucket : formatBucketTooltip(ms, data.granularity),
+        value: b.requests,
+      }
+    })
+  }, [kpiQuery.data])
 
   return (
     <>
@@ -359,7 +384,13 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Stat cards */}
+        {/* Self-hiding once every step the viewer can do is complete, or when dismissed */}
+        {me && <GettingStarted />}
+
+        {/* KPI row: follows the page time range; each tile drills into the request log */}
+        <DashboardKpiRow range={timeRange} from={from} to={to} enabled={!!me} />
+
+        {/* Keys + model health */}
         {statsQuery.isError && stats == null ? (
           <ErrorState
             variant="card"
@@ -369,50 +400,30 @@ export default function DashboardPage() {
             retrying={statsQuery.isFetching}
           />
         ) : statsLoading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5" aria-busy="true" aria-label="Loading stats">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" aria-busy="true" aria-label="Loading stats">
             {[0, 1, 2, 3].map((i) => (
               <Skeleton key={i} className="h-[124px] rounded-xl" />
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-            <StatCard
-              label="Requests (24h)"
-              value={statValue(() => formatNumber(stats?.requests_24h ?? 0))}
-              icon={<Activity className={ICON} />}
-              iconColor="purple"
-            />
-            <StatCard
-              label="Tokens (24h)"
-              value={statValue(() => formatTokens(stats?.tokens_24h ?? 0))}
-              icon={<Zap className={ICON} />}
-              iconColor="blue"
-            />
-            <StatCard
-              label="Est. Cost (24h)"
-              value={statValue(() => formatCost(stats?.cost_estimate_24h ?? 0))}
-              icon={<DollarSign className={ICON} />}
-              iconColor="green"
-            />
-            <StatCard
-              label="Active Keys"
-              value={statValue(() => formatNumber(stats?.active_keys ?? 0))}
-              icon={<KeyRound className={ICON} />}
-              iconColor="pink"
-            />
-          </div>
-        )}
-
-        {/* Model Health summary */}
-        {!statsLoading && showModelHealth && (
-          <section aria-labelledby="dash-model-health">
-            <h2 id="dash-model-health" className="text-sm font-medium text-text-tertiary uppercase tracking-wider mb-3">
-              Model Health
+          <section aria-labelledby="dash-glance">
+            <h2 id="dash-glance" className="text-sm font-medium text-text-tertiary uppercase tracking-wider mb-3">
+              {showModelHealth ? 'Keys & Model Health' : 'Keys'}
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <StatCard label="Healthy" value={healthCounts.healthy} icon={<HeartPulse className={ICON} />} iconColor="green" />
-              <StatCard label="Degraded" value={healthCounts.degraded} icon={<TriangleAlert className={ICON} />} iconColor="yellow" />
-              <StatCard label="Unhealthy" value={healthCounts.unhealthy} icon={<CircleX className={ICON} />} iconColor="red" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <StatCard
+                label="Active Keys"
+                value={stats == null ? '—' : formatNumber(stats.active_keys ?? 0)}
+                icon={<KeyRound className={ICON} />}
+                iconColor="pink"
+              />
+              {showModelHealth && (
+                <>
+                  <StatCard label="Healthy models" value={healthCounts.healthy} icon={<HeartPulse className={ICON} />} iconColor="green" />
+                  <StatCard label="Degraded models" value={healthCounts.degraded} icon={<TriangleAlert className={ICON} />} iconColor="yellow" />
+                  <StatCard label="Unhealthy models" value={healthCounts.unhealthy} icon={<CircleX className={ICON} />} iconColor="red" />
+                </>
+              )}
             </div>
           </section>
         )}
@@ -423,21 +434,30 @@ export default function DashboardPage() {
         )}
 
         {/* Requests over time */}
-        {me != null && (canViewOrgUsage ? orgId !== '' : true) && (
+        {me != null && (
           <Card>
-            <CardHeader title="Requests over Time" description={timeRangeLabel(timeRange, 'long')} />
+            <CardHeader
+              title="Requests over Time"
+              description={`${timeRangeLabel(timeRange, 'long')}, per ${granularity}. Select a point to open its requests.`}
+            />
             <QueryState
-              query={seriesQuery}
+              query={kpiQuery}
               errorTitle="Couldn't load request history"
               loading={<Skeleton className="w-full rounded-lg h-[220px]" />}
+              isEmpty={(d) => d.series.every((b) => b.requests === 0)}
               empty={<SectionEmpty title="No requests" description={emptyPeriodDescription} />}
             >
-              {(series) => (
-                <AreaChart
-                  data={series.data.map((d) => ({ label: d.group_key, value: d.total_requests }))}
+              {() => (
+                <TimeSeriesChart
+                  ariaLabel={`Requests per ${granularity}`}
+                  data={requestSeries}
                   height={220}
                   color={chartColor(0)}
                   formatValue={formatNumber}
+                  getPointHref={(_, i) =>
+                    requestLogsUrl({ range: bucketRange(requestSeries[i].bucket, granularity) ?? timeRange })
+                  }
+                  pointActionLabel="view requests in request logs"
                 />
               )}
             </QueryState>

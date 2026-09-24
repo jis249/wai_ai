@@ -19,6 +19,7 @@ from wai.api.admin import (
     model_aliases,
     models,
     oidc,
+    onboarding,
     org_memberships,
     org_sso,
     orgs,
@@ -63,6 +64,7 @@ def create_admin_router() -> APIRouter:
     authed.add_api_route(f"{API_PREFIX}/me", auth.me, methods=["GET"], tags=["auth"])
     authed.add_api_route(f"{API_PREFIX}/me/available-models", auth.available_models, methods=["GET"], tags=["auth"])
     authed.include_router(dashboard.router, prefix=API_PREFIX)
+    authed.include_router(onboarding.router, prefix=API_PREFIX)
     authed.include_router(system.router, prefix=API_PREFIX)
     authed.include_router(setup.router, prefix=API_PREFIX)
     authed.include_router(usage.router, prefix=API_PREFIX)

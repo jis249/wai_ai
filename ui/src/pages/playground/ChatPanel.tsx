@@ -5,6 +5,8 @@ import { cn } from '../../lib/utils'
 import { MessageMarkdown, TypingIndicator } from './MessageMarkdown'
 import type { ChatMessage, UsageInfo } from './useChatStream'
 import { formatMetrics } from './metrics'
+import { JsonViewer } from './JsonViewer'
+import { prettyJsonReply } from './responseFormat'
 
 interface ChatPanelProps {
   messages: ChatMessage[]
@@ -13,6 +15,8 @@ interface ChatPanelProps {
   error: string | null
   usage: UsageInfo | null
   canSend: boolean
+  /** Shown under the composer when sending is blocked (e.g. invalid JSON schema). */
+  blockedReason?: string | null
   onSend: (text: string) => void
   onStop: () => void
 }
@@ -25,7 +29,23 @@ function AssistantAvatar() {
   )
 }
 
-export function ChatPanel({ messages, isStreaming, streamEnabled, error, usage, canSend, onSend, onStop }: ChatPanelProps) {
+/** Assistant reply body: pretty JSON viewer when the finished reply is JSON, else markdown. */
+export function AssistantContent({ content, streaming }: { content: string; streaming: boolean }) {
+  const json = streaming ? null : prettyJsonReply(content)
+  return json !== null ? <JsonViewer json={json} /> : <MessageMarkdown content={content} />
+}
+
+export function ChatPanel({
+  messages,
+  isStreaming,
+  streamEnabled,
+  error,
+  usage,
+  canSend,
+  blockedReason,
+  onSend,
+  onStop,
+}: ChatPanelProps) {
   const [draft, setDraft] = useState('')
   const endRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -70,7 +90,7 @@ export function ChatPanel({ messages, isStreaming, streamEnabled, error, usage, 
                 {msg.role === 'user' ? (
                   <p className="whitespace-pre-wrap break-words">{msg.content}</p>
                 ) : msg.content ? (
-                  <MessageMarkdown content={msg.content} />
+                  <AssistantContent content={msg.content} streaming={isStreaming && msg.id === lastId} />
                 ) : isStreaming && msg.id === lastId ? (
                   <TypingIndicator />
                 ) : (
@@ -136,6 +156,11 @@ export function ChatPanel({ messages, isStreaming, streamEnabled, error, usage, 
             )}
           </div>
         </div>
+        {blockedReason && (
+          <p className="px-2 pt-2 text-xs text-warning" role="status">
+            {blockedReason}
+          </p>
+        )}
         {usage !== null && (
           <div className="flex items-center gap-2.5 px-2 pt-2">
             <Zap className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />

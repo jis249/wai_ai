@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Banner } from '../../components/ui/Banner'
 import { Button } from '../../components/ui/Button'
 import { CopyButton } from '../../components/ui/CopyButton'
 import { EmptyState } from '../../components/ui/EmptyState'
@@ -10,7 +11,8 @@ import { SegmentedControl } from '../../components/ui/SegmentedControl'
 import { SkeletonRows } from '../../components/ui/Skeleton'
 import { TimeAgo } from '../../components/ui/TimeAgo'
 import { TimeRangePicker } from '../../components/ui/TimeRangePicker'
-import { KeyRound, RefreshCw, ScrollText, Search, X } from '../../components/ui/icons'
+import { Toggle } from '../../components/ui/Toggle'
+import { ArrowUp, KeyRound, RefreshCw, ScrollText, Search, X } from '../../components/ui/icons'
 import {
   totalTokens,
   useRequestLogs,
@@ -26,9 +28,11 @@ import {
   serializeTimeRange,
   type TimeRangeValue,
 } from '../../lib/timeRange'
-import { formatCost, formatDate, formatNumber } from '../../lib/utils'
+import { cn, formatCost, formatDate, formatNumber } from '../../lib/utils'
+import { isEditableTarget } from '../../hooks/useHotkeys'
 import { RequestLogDetailSheet } from './RequestLogDetailSheet'
 import { CacheHitBadge, RequestStatusBadge } from './requestLogStatus'
+import { LIVE_TAIL_MAX_ROWS, useLiveTail } from './useLiveTail'
 
 type StatusOption = 'all' | RequestLogStatusFilter
 type TimeMode = 'any' | 'range'
@@ -52,8 +56,52 @@ const CURL_SNIPPET = `curl ${resolveProxyBaseUrl()}/chat/completions \\
   -H "Content-Type: application/json" \\
   -d '{"model": "auto", "messages": [{"role": "user", "content": "Hello"}]}'`
 
+/** Live tail auto-pauses once the page is scrolled further than this. */
+export const LIVE_SCROLL_PAUSE_PX = 200
+
 function parseStatus(raw: string | null): RequestLogStatusFilter | undefined {
   return raw === 'success' || raw === 'error' ? raw : undefined
+}
+
+function scrollToTop() {
+  try {
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' })
+  } catch {
+    // jsdom / old browsers
+  }
+}
+
+function dedupeById(rows: RequestLogRow[]): RequestLogRow[] {
+  const seen = new Set<string>()
+  const out: RequestLogRow[] = []
+  for (const r of rows) {
+    if (seen.has(r.id)) continue
+    seen.add(r.id)
+    out.push(r)
+  }
+  return out
+}
+
+function LiveStatus({ reason }: { reason: string | null }) {
+  return (
+    <span role="status" className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
+      {reason == null ? (
+        <>
+          <span className="relative inline-flex h-2 w-2" aria-hidden="true">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-success opacity-75 motion-safe:animate-ping" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
+          </span>
+          Live
+        </>
+      ) : (
+        <>
+          <span className="inline-flex h-2 w-2 rounded-full bg-text-tertiary" aria-hidden="true" />
+          {reason}
+        </>
+      )}
+    </span>
+  )
 }
 
 export default function RequestLogsPage() {
@@ -65,9 +113,14 @@ export default function RequestLogsPage() {
   const keyId = searchParams.get('key_id') ?? ''
   const range = parseTimeRange(searchParams.get('range'))
 
+  const requestId = searchParams.get('request') ?? ''
+
   const [modelDraft, setModelDraft] = useState(model)
   const [refreshKey, setRefreshKey] = useState(0)
-  const [selected, setSelected] = useState<RequestLogRow | null>(null)
+  const [live, setLive] = useState(false)
+  const [scrolledAway, setScrolledAway] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const rowButtons = useRef(new Map<string, HTMLButtonElement>())
 
   function updateParams(changes: Record<string, string | null>) {
     setSearchParams(
@@ -114,7 +167,107 @@ export default function RequestLogsPage() {
     to: bounds?.to,
   })
 
-  const rows = useMemo(() => query.data?.pages.flatMap((p) => p.data) ?? [], [query.data])
+  const pagedRows = useMemo(() => query.data?.pages.flatMap((p) => p.data) ?? [], [query.data])
+
+  // Live tail: presets poll without the `to` bound (it was fixed when the range resolved);
+  // a custom range keeps it.
+  const liveFilters = useMemo(
+    () => ({
+      status,
+      model: model || undefined,
+      key_id: keyId || undefined,
+      from: bounds?.from,
+      to: range != null && isCustomTimeRange(range) ? bounds?.to : undefined,
+    }),
+    [status, model, keyId, bounds, range],
+  )
+  const liveKey = `${status ?? ''}|${model}|${keyId}|${rangeKey}|${refreshKey}`
+
+  const tail = useLiveTail({
+    enabled: live,
+    paused: scrolledAway || (requestId !== '' && pagedRows.some((r) => r.id === requestId)),
+    openRowId: requestId || undefined,
+    filters: liveFilters,
+    resetKey: liveKey,
+    newestLoaded: pagedRows[0],
+  })
+
+  const allRows = useMemo(() => dedupeById([...tail.rows, ...pagedRows]), [tail.rows, pagedRows])
+  const truncated = allRows.length > LIVE_TAIL_MAX_ROWS
+  const rows = truncated ? allRows.slice(0, LIVE_TAIL_MAX_ROWS) : allRows
+  const selectedRow = requestId ? (rows.find((r) => r.id === requestId) ?? null) : null
+  const deepLinkMissing = requestId !== '' && selectedRow == null && query.isSuccess && !query.isFetching
+
+  const requestIdRef = useRef(requestId)
+  const flushRef = useRef(tail.flush)
+  useEffect(() => {
+    requestIdRef.current = requestId
+    flushRef.current = tail.flush
+  })
+
+  // Auto-pause the live tail while the user is reading further down the page.
+  useEffect(() => {
+    if (!live) return
+    const onScroll = () => {
+      const away = window.scrollY > LIVE_SCROLL_PAUSE_PX
+      setScrolledAway(away)
+      if (!away && requestIdRef.current === '') flushRef.current()
+    }
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [live])
+
+  const pauseReason = !live
+    ? null
+    : tail.hidden
+      ? 'Paused (tab hidden)'
+      : selectedRow != null
+        ? 'Paused while viewing details'
+        : scrolledAway
+          ? 'Paused (scrolled down)'
+          : null
+
+  function openRow(row: RequestLogRow) {
+    updateParams({ request: row.id })
+  }
+
+  function jumpToTop() {
+    scrollToTop()
+    setScrolledAway(false)
+    tail.flush()
+  }
+
+  function focusRow(index: number) {
+    const clamped = Math.min(Math.max(index, 0), rows.length - 1)
+    const row = rows[clamped]
+    if (row == null) return
+    setActiveIndex(clamped)
+    rowButtons.current.get(row.id)?.focus()
+  }
+
+  // j / k move between rows, Enter opens the focused row. Only while focus is inside the
+  // table; preventDefault keeps global single-key shortcuts from also firing.
+  function onTableKeyDown(e: KeyboardEvent<HTMLTableElement>) {
+    if (e.altKey || e.ctrlKey || e.metaKey || isEditableTarget(e.target)) return
+    const current = Math.min(activeIndex, rows.length - 1)
+    if (e.key === 'j') {
+      e.preventDefault()
+      focusRow(current + 1)
+    } else if (e.key === 'k') {
+      e.preventDefault()
+      focusRow(current - 1)
+    } else if (e.key === 'Enter') {
+      const target = e.target as HTMLElement
+      if (target.closest('button, a')) return // native activation
+      const row = rows[current]
+      if (row != null) {
+        e.preventDefault()
+        openRow(row)
+      }
+    }
+  }
+
   const modelSuggestions = useMemo(() => {
     const set = new Set<string>()
     for (const r of rows) {
@@ -226,7 +379,11 @@ export default function RequestLogsPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 sm:ml-auto">
+        <div className="flex flex-wrap items-center gap-3 sm:ml-auto">
+          <div className="flex items-center gap-2">
+            <Toggle checked={live} onChange={setLive} label="Live tail" aria-label="Live tail" size="sm" />
+            {live && <LiveStatus reason={pauseReason} />}
+          </div>
           {hasFilters && (
             <Button size="sm" variant="ghost" icon={<X className="w-4 h-4" />} onClick={clearFilters}>
               Clear filters
@@ -254,6 +411,21 @@ export default function RequestLogsPage() {
         )}
       </div>
 
+      {deepLinkMissing && (
+        <Banner
+          variant="info"
+          title={`Request ${requestId} not in the loaded range`}
+          description="Widen the time range, clear filters or load more rows to find it."
+          onDismiss={() => updateParams({ request: null })}
+        />
+      )}
+
+      {live && tail.error != null && (
+        <p role="alert" className="text-sm text-error">
+          Live tail couldn't fetch new requests. Retrying every few seconds.
+        </p>
+      )}
+
       <QueryState
         query={query}
         loading={
@@ -267,8 +439,21 @@ export default function RequestLogsPage() {
       >
         {() => (
           <div className="space-y-3">
+            {tail.pending.length > 0 && (
+              <div className="sticky top-16 z-10 flex justify-center lg:top-4">
+                <Button
+                  size="sm"
+                  variant="primary"
+                  icon={<ArrowUp className="w-4 h-4" />}
+                  onClick={jumpToTop}
+                  className="rounded-full shadow-lg"
+                >
+                  {formatNumber(tail.pending.length)} new — jump to top
+                </Button>
+              </div>
+            )}
             <div className="overflow-x-auto rounded-xl border border-border bg-bg-secondary">
-              <table className="min-w-full text-sm">
+              <table className="min-w-full text-sm" onKeyDown={onTableKeyDown} aria-describedby="rl-keyboard-hint">
                 <thead>
                   <tr className="border-b border-border bg-bg-tertiary/50 text-left text-xs font-medium uppercase tracking-wider text-text-tertiary">
                     <th scope="col" className="px-4 py-3">Time</th>
@@ -281,20 +466,29 @@ export default function RequestLogsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => (
+                  {rows.map((row, index) => (
                     <tr
                       key={row.id}
-                      className="cursor-pointer border-b border-border last:border-0 transition-colors hover:bg-bg-tertiary/30"
-                      onClick={() => setSelected(row)}
+                      data-highlighted={tail.highlighted.has(row.id) ? 'true' : undefined}
+                      className={cn(
+                        'cursor-pointer border-b border-border last:border-0 motion-safe:transition-colors motion-safe:duration-700 hover:bg-bg-tertiary/30 focus-within:bg-bg-tertiary/40',
+                        tail.highlighted.has(row.id) && 'bg-accent/10',
+                      )}
+                      onClick={() => openRow(row)}
                     >
                       <td className="whitespace-nowrap px-4 py-3">
                         <button
                           type="button"
+                          ref={(el) => {
+                            if (el) rowButtons.current.set(row.id, el)
+                            else rowButtons.current.delete(row.id)
+                          }}
                           className="cursor-pointer rounded text-left text-text-primary hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                           aria-label={`View details for request at ${formatDate(row.created_at)}`}
+                          onFocus={() => setActiveIndex(index)}
                           onClick={(e) => {
                             e.stopPropagation()
-                            setSelected(row)
+                            openRow(row)
                           }}
                         >
                           <TimeAgo date={row.created_at} />
@@ -337,9 +531,17 @@ export default function RequestLogsPage() {
 
             <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-text-tertiary">
               <span>
-                Showing {formatNumber(rows.length)} request{rows.length === 1 ? '' : 's'}
+                Showing {truncated ? 'the newest ' : ''}
+                {formatNumber(rows.length)} request{rows.length === 1 ? '' : 's'}
+                <span id="rl-keyboard-hint" className="ml-2 hidden text-xs sm:inline">
+                  <kbd className="rounded border border-border px-1 font-mono">j</kbd> /{' '}
+                  <kbd className="rounded border border-border px-1 font-mono">k</kbd> move between rows,{' '}
+                  <kbd className="rounded border border-border px-1 font-mono">Enter</kbd> opens details
+                </span>
               </span>
-              {query.hasNextPage ? (
+              {truncated ? (
+                <span>Live tail keeps the newest {formatNumber(LIVE_TAIL_MAX_ROWS)} rows</span>
+              ) : query.hasNextPage ? (
                 <Button
                   size="sm"
                   variant="secondary"
@@ -361,7 +563,13 @@ export default function RequestLogsPage() {
         )}
       </QueryState>
 
-      <RequestLogDetailSheet row={selected} onClose={() => setSelected(null)} />
+      <RequestLogDetailSheet
+        row={selectedRow}
+        onClose={() => {
+          updateParams({ request: null })
+          if (!scrolledAway) tail.flush()
+        }}
+      />
     </div>
   )
 }

@@ -4,9 +4,7 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Select } from '../../components/ui/Select'
 import { SegmentedControl } from '../../components/ui/SegmentedControl'
-import { Toggle } from '../../components/ui/Toggle'
 import { Skeleton } from '../../components/ui/Skeleton'
-import { ChevronDown } from '../../components/ui/icons'
 import { useMe } from '../../hooks/useMe'
 import { useCreateAPIKey } from '../../hooks/useAPIKeys'
 import type { APIKeyResponse, CreateAPIKeyParams } from '../../hooks/useAPIKeys'
@@ -16,21 +14,44 @@ import { useAvailableModels } from '../../hooks/useAvailableModels'
 import { useToast } from '../../hooks/useToast'
 import apiClient from '../../api/client'
 import { errorMessage } from '../../lib/errors'
-import { cn } from '../../lib/utils'
 import { KeyLimitsFields } from './KeyLimitsFields'
-import { EMPTY_LIMITS, EXPIRES_OPTIONS, KEY_TYPE_OPTIONS, expiresAtFromOption, parseLimit } from './helpers'
-import type { KeyLimitsValue } from './helpers'
+import { Stepper } from './Stepper'
+import type { StepperStep } from './Stepper'
+import { EMPTY_LIMITS, EXPIRES_OPTIONS, KEY_TYPE_OPTIONS, expiresAtFromOption, parseLimit, validateLimits } from './helpers'
+import type { KeyLimitsValue, LimitErrors } from './helpers'
 
 interface CreateKeyDialogProps {
   open: boolean
   onClose: () => void
   onCreated: (key: string, created: APIKeyResponse) => void
   orgId: string
+  /**
+   * Whether the caller may set token/rate limits (org admin+; same as EditKeyDialog's
+   * `canEditLimits`). When false the "Limits & expiry" step is skipped and expiry moves to Details.
+   */
+  canEditLimits?: boolean
 }
+
+type StepId = 'details' | 'access' | 'limits' | 'review'
+
+const STEP_LABELS: Record<StepId, string> = {
+  details: 'Details',
+  access: 'Access',
+  limits: 'Limits & expiry',
+  review: 'Review',
+}
+
+const LIMIT_LABELS: { key: keyof KeyLimitsValue; label: string }[] = [
+  { key: 'dailyTokenLimit', label: 'Daily tokens' },
+  { key: 'monthlyTokenLimit', label: 'Monthly tokens' },
+  { key: 'requestsPerMinute', label: 'Requests / minute' },
+  { key: 'requestsPerDay', label: 'Requests / day' },
+]
 
 const sectionLabel = 'text-[10px] font-medium tracking-widest uppercase text-text-tertiary'
 
-export function CreateKeyDialog({ open, onClose, onCreated, orgId }: CreateKeyDialogProps) {
+export function CreateKeyDialog({ open, onClose, onCreated, orgId, canEditLimits = false }: CreateKeyDialogProps) {
+  const [stepIndex, setStepIndex] = useState(0)
   const [name, setName] = useState('')
   const [keyType, setKeyType] = useState('user_key')
   const [expiresIn, setExpiresIn] = useState('90d')
@@ -41,8 +62,9 @@ export function CreateKeyDialog({ open, onClose, onCreated, orgId }: CreateKeyDi
   const [serviceAccountError, setServiceAccountError] = useState<string | undefined>()
   const [restrictModels, setRestrictModels] = useState(false)
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set())
-  const [showAdvancedLimits, setShowAdvancedLimits] = useState(false)
+  const [modelsError, setModelsError] = useState<string | undefined>()
   const [limits, setLimits] = useState<KeyLimitsValue>(EMPTY_LIMITS)
+  const [limitErrors, setLimitErrors] = useState<LimitErrors>({})
 
   const { data: me } = useMe()
   const { data: teams } = useTeams(orgId)
@@ -57,7 +79,18 @@ export function CreateKeyDialog({ open, onClose, onCreated, orgId }: CreateKeyDi
   const { toast } = useToast()
   const pending = createKey.isPending
 
+  const stepIds: StepId[] = canEditLimits ? ['details', 'access', 'limits', 'review'] : ['details', 'access', 'review']
+  const steps: StepperStep[] = stepIds.map((id) => ({ id, label: STEP_LABELS[id] }))
+  const safeIndex = Math.min(stepIndex, stepIds.length - 1)
+  const step = stepIds[safeIndex]
+  const isLast = safeIndex === stepIds.length - 1
+
+  const models = availableModels.data?.models ?? []
+  const teamName = userTeams.find((t) => t.id === teamId)?.name
+  const serviceAccountName = serviceAccounts?.data?.find((sa) => sa.id === serviceAccountId)?.name
+
   function handleClose() {
+    setStepIndex(0)
     setName('')
     setKeyType('user_key')
     setExpiresIn('90d')
@@ -68,8 +101,9 @@ export function CreateKeyDialog({ open, onClose, onCreated, orgId }: CreateKeyDi
     setServiceAccountError(undefined)
     setRestrictModels(false)
     setSelectedModels(new Set())
-    setShowAdvancedLimits(false)
+    setModelsError(undefined)
     setLimits(EMPTY_LIMITS)
+    setLimitErrors({})
     onClose()
   }
 
@@ -82,6 +116,7 @@ export function CreateKeyDialog({ open, onClose, onCreated, orgId }: CreateKeyDi
   }
 
   function toggleModel(modelName: string) {
+    setModelsError(undefined)
     setSelectedModels((prev) => {
       const next = new Set(prev)
       if (next.has(modelName)) next.delete(modelName)
@@ -90,42 +125,67 @@ export function CreateKeyDialog({ open, onClose, onCreated, orgId }: CreateKeyDi
     })
   }
 
-  function handleSubmit(e: React.FormEvent | React.MouseEvent) {
-    e.preventDefault()
-
-    const trimmedName = name.trim()
-    let hasError = false
-
-    if (!trimmedName) {
+  function validateDetails(): boolean {
+    let ok = true
+    if (!name.trim()) {
       setNameError('Name is required')
-      hasError = true
-    } else {
-      setNameError(undefined)
-    }
+      ok = false
+    } else setNameError(undefined)
 
     if (keyType === 'user_key' && userTeams.length > 1 && !teamId) {
       setTeamError('Select a team for this key')
-      hasError = true
+      ok = false
     } else if (keyType === 'team_key' && !teamId) {
       setTeamError('Team is required')
-      hasError = true
-    } else {
-      setTeamError(undefined)
-    }
-
-    if (keyType === 'user_key' && !me?.id) hasError = true
+      ok = false
+    } else setTeamError(undefined)
 
     if (keyType === 'sa_key' && !serviceAccountId) {
       setServiceAccountError('Service account is required')
-      hasError = true
-    } else {
-      setServiceAccountError(undefined)
+      ok = false
+    } else setServiceAccountError(undefined)
+
+    if (keyType === 'user_key' && !me?.id) {
+      toast({ variant: 'info', message: 'Still loading your account. Try again in a moment.' })
+      ok = false
     }
+    return ok
+  }
 
-    if (hasError) return
+  function validateAccess(): boolean {
+    if (restrictModels && selectedModels.size === 0) {
+      setModelsError('Select at least one model, or allow all models')
+      return false
+    }
+    setModelsError(undefined)
+    return true
+  }
 
+  function validateLimitsStep(): boolean {
+    const errors = validateLimits(limits)
+    setLimitErrors(errors)
+    return Object.keys(errors).length === 0
+  }
+
+  function validateStep(id: StepId): boolean {
+    if (id === 'details') return validateDetails()
+    if (id === 'access') return validateAccess()
+    if (id === 'limits') return validateLimitsStep()
+    return true
+  }
+
+  function handleNext() {
+    if (!validateStep(step)) return
+    setStepIndex(safeIndex + 1)
+  }
+
+  function handleBack() {
+    setStepIndex(Math.max(0, safeIndex - 1))
+  }
+
+  function buildParams(): CreateAPIKeyParams {
     const params: CreateAPIKeyParams = {
-      name: trimmedName,
+      name: name.trim(),
       key_type: keyType,
       expires_at: expiresAtFromOption(expiresIn),
       ...(keyType === 'user_key' ? { user_id: me?.id } : {}),
@@ -133,17 +193,28 @@ export function CreateKeyDialog({ open, onClose, onCreated, orgId }: CreateKeyDi
       ...((keyType === 'team_key' || keyType === 'user_key') && teamId ? { team_id: teamId } : {}),
       ...(keyType === 'sa_key' && serviceAccountId ? { service_account_id: serviceAccountId } : {}),
     }
+    if (canEditLimits) {
+      const daily = parseLimit(limits.dailyTokenLimit)
+      if (daily !== undefined) params.daily_token_limit = daily
+      const monthly = parseLimit(limits.monthlyTokenLimit)
+      if (monthly !== undefined) params.monthly_token_limit = monthly
+      const rpm = parseLimit(limits.requestsPerMinute)
+      if (rpm !== undefined) params.requests_per_minute = rpm
+      const rpd = parseLimit(limits.requestsPerDay)
+      if (rpd !== undefined) params.requests_per_day = rpd
+    }
+    return params
+  }
 
-    const daily = parseLimit(limits.dailyTokenLimit)
-    if (daily !== undefined) params.daily_token_limit = daily
-    const monthly = parseLimit(limits.monthlyTokenLimit)
-    if (monthly !== undefined) params.monthly_token_limit = monthly
-    const rpm = parseLimit(limits.requestsPerMinute)
-    if (rpm !== undefined) params.requests_per_minute = rpm
-    const rpd = parseLimit(limits.requestsPerDay)
-    if (rpd !== undefined) params.requests_per_day = rpd
-
-    createKey.mutate(params, {
+  function handleCreate() {
+    // Re-check every step (a stale later step could have been edited via Back).
+    for (let i = 0; i < stepIds.length - 1; i++) {
+      if (!validateStep(stepIds[i])) {
+        setStepIndex(i)
+        return
+      }
+    }
+    createKey.mutate(buildParams(), {
       onSuccess: async (data) => {
         if (restrictModels && selectedModels.size > 0) {
           try {
@@ -164,148 +235,250 @@ export function CreateKeyDialog({ open, onClose, onCreated, orgId }: CreateKeyDi
     })
   }
 
-  const models = availableModels.data?.models ?? []
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (pending) return
+    if (isLast) handleCreate()
+    else handleNext()
+  }
+
+  const expirySelect = (
+    <Select label="Expires in" options={EXPIRES_OPTIONS} value={expiresIn} onChange={setExpiresIn} disabled={pending} />
+  )
+
+  const expiresLabel = EXPIRES_OPTIONS.find((o) => o.value === expiresIn)?.label ?? expiresIn
+  const typeLabel = KEY_TYPE_OPTIONS.find((o) => o.value === keyType)?.label ?? keyType
+  const setLimitsList = LIMIT_LABELS.filter(({ key }) => limits[key].trim() !== '' && limits[key].trim() !== '0')
 
   return (
-    <Dialog open={open} onClose={handleClose} title="Create API Key">
-      <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-        <Input
-          label="Name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Production backend"
-          error={nameError}
-          disabled={pending}
-        />
-        <div>
-          <p id="create-key-type-label" className="mb-2 block text-sm font-medium text-text-secondary">
-            Key type
-          </p>
-          <SegmentedControl
-            aria-labelledby="create-key-type-label"
-            size="sm"
-            fullWidth
-            options={KEY_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label, disabled: pending }))}
-            value={keyType}
-            onChange={handleKeyTypeChange}
-          />
-        </div>
-        {showTeamPicker && (
-          <Select
-            label="Team"
-            options={userTeams.map((t) => ({ value: t.id, label: t.name }))}
-            value={teamId}
-            onChange={(v) => {
-              setTeamId(v)
-              setTeamError(undefined)
-            }}
-            placeholder="Select a team..."
-            searchable
-            error={teamError}
-            disabled={pending}
-          />
-        )}
-        {keyType === 'sa_key' && (
-          <Select
-            label="Service Account"
-            options={serviceAccounts?.data?.map((sa) => ({ value: sa.id, label: sa.name })) ?? []}
-            value={serviceAccountId}
-            onChange={(v) => {
-              setServiceAccountId(v)
-              setServiceAccountError(undefined)
-            }}
-            placeholder="Select a service account..."
-            searchable
-            error={serviceAccountError}
-            disabled={pending}
-          />
-        )}
-        <Select label="Expires In" options={EXPIRES_OPTIONS} value={expiresIn} onChange={setExpiresIn} disabled={pending} />
-
-        {/* Rate & token limits — collapsible */}
-        <div className="border-t border-border pt-4">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between"
-            onClick={() => setShowAdvancedLimits((v) => !v)}
-            aria-expanded={showAdvancedLimits}
-            disabled={pending}
-          >
-            <span className={sectionLabel}>Rate &amp; Token Limits</span>
-            <ChevronDown
-              aria-hidden="true"
-              className={cn('h-3.5 w-3.5 text-text-tertiary transition-transform duration-150', showAdvancedLimits && 'rotate-180')}
-            />
-          </button>
-          {showAdvancedLimits && (
-            <div className="mt-4">
-              <KeyLimitsFields value={limits} onChange={setLimits} disabled={pending} />
-            </div>
-          )}
-        </div>
-
-        {/* Model access */}
-        <div className="border-t border-border pt-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className={sectionLabel}>Model Access</span>
-            <Toggle checked={restrictModels} onChange={setRestrictModels} label="Restrict models" size="sm" disabled={pending} />
-          </div>
-          <p className="mt-2 text-xs text-text-tertiary">
-            {restrictModels
-              ? 'Only selected models will be accessible with this key.'
-              : 'Key inherits model access from team and organization scope.'}
-          </p>
-
-          {restrictModels && (
-            <div className="mt-3">
-              {availableModels.isError ? (
-                <p className="text-xs text-error" role="alert">
-                  Could not load models: {errorMessage(availableModels.error)}{' '}
-                  <button type="button" className="underline" onClick={() => void availableModels.refetch()}>
-                    Retry
-                  </button>
-                </p>
-              ) : availableModels.isPending ? (
-                <div className="space-y-2 rounded-lg border border-border p-3" aria-label="Loading models">
-                  {Array.from({ length: 3 }).map((_, i) => (
-                    <Skeleton key={i} className="h-4 w-40" />
-                  ))}
-                </div>
-              ) : models.length === 0 ? (
-                <p className="text-xs text-text-tertiary">No models available.</p>
-              ) : (
-                <div className="max-h-48 overflow-y-auto rounded-lg border border-border p-1.5">
-                  {models.map((m) => (
-                    <label
-                      key={m.name}
-                      className="flex cursor-pointer items-center gap-3 rounded px-2 py-1.5 hover:bg-bg-tertiary"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedModels.has(m.name)}
-                        onChange={() => toggleModel(m.name)}
-                        className="accent-accent h-4 w-4 shrink-0 cursor-pointer"
-                        disabled={pending}
-                      />
-                      <span className="min-w-0 truncate font-mono text-sm text-text-primary">{m.name}</span>
-                      {m.type !== 'chat' && <span className="ml-auto text-xs text-text-tertiary">{m.type}</span>}
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        <div className="flex flex-wrap justify-end gap-2 pt-2">
-          <Button variant="secondary" onClick={handleClose} disabled={pending}>
+    <Dialog
+      open={open}
+      onClose={handleClose}
+      title="Create API Key"
+      footer={
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button variant="ghost" onClick={handleClose} disabled={pending}>
             Cancel
           </Button>
-          <Button type="submit" loading={pending}>
-            Create Key
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {safeIndex > 0 && (
+              <Button variant="secondary" onClick={handleBack} disabled={pending}>
+                Back
+              </Button>
+            )}
+            <Button type="submit" form="create-key-form" loading={pending}>
+              {isLast ? 'Create key' : 'Next'}
+            </Button>
+          </div>
         </div>
+      }
+    >
+      <Stepper steps={steps} current={safeIndex} className="mb-5" />
+      <form id="create-key-form" onSubmit={handleSubmit} className="space-y-4" noValidate aria-label={STEP_LABELS[step]}>
+        {step === 'details' && (
+          <>
+            <Input
+              label="Name"
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value)
+                if (nameError) setNameError(undefined)
+              }}
+              placeholder="e.g. Production backend"
+              error={nameError}
+              disabled={pending}
+              autoFocus
+            />
+            <div>
+              <p id="create-key-type-label" className="mb-2 block text-sm font-medium text-text-secondary">
+                Key type
+              </p>
+              <SegmentedControl
+                aria-labelledby="create-key-type-label"
+                size="sm"
+                fullWidth
+                options={KEY_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label, disabled: pending }))}
+                value={keyType}
+                onChange={handleKeyTypeChange}
+              />
+            </div>
+            {showTeamPicker && (
+              <Select
+                label="Team"
+                options={userTeams.map((t) => ({ value: t.id, label: t.name }))}
+                value={teamId}
+                onChange={(v) => {
+                  setTeamId(v)
+                  setTeamError(undefined)
+                }}
+                placeholder="Select a team..."
+                searchable
+                error={teamError}
+                disabled={pending}
+              />
+            )}
+            {keyType === 'sa_key' && (
+              <Select
+                label="Service Account"
+                options={serviceAccounts?.data?.map((sa) => ({ value: sa.id, label: sa.name })) ?? []}
+                value={serviceAccountId}
+                onChange={(v) => {
+                  setServiceAccountId(v)
+                  setServiceAccountError(undefined)
+                }}
+                placeholder="Select a service account..."
+                searchable
+                error={serviceAccountError}
+                disabled={pending}
+              />
+            )}
+            {/* Non-admins skip the Limits step, so expiry lives here for them. */}
+            {!canEditLimits && expirySelect}
+          </>
+        )}
+
+        {step === 'access' && (
+          <fieldset className="space-y-3">
+            <legend className={sectionLabel}>Model access</legend>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 has-[:checked]:border-accent">
+              <input
+                type="radio"
+                name="model-access"
+                className="accent-accent mt-0.5 h-4 w-4 shrink-0"
+                checked={!restrictModels}
+                onChange={() => {
+                  setRestrictModels(false)
+                  setModelsError(undefined)
+                }}
+                disabled={pending}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-text-primary">All models the org allows</span>
+                <span className="block text-xs text-text-tertiary">
+                  The key inherits model access from its team and organization.
+                </span>
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 has-[:checked]:border-accent">
+              <input
+                type="radio"
+                name="model-access"
+                className="accent-accent mt-0.5 h-4 w-4 shrink-0"
+                checked={restrictModels}
+                onChange={() => setRestrictModels(true)}
+                disabled={pending}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-text-primary">Only specific models</span>
+                <span className="block text-xs text-text-tertiary">Restrict this key to the models you pick.</span>
+              </span>
+            </label>
+
+            {restrictModels && (
+              <div>
+                {availableModels.isError ? (
+                  <p className="text-xs text-error" role="alert">
+                    Could not load models: {errorMessage(availableModels.error)}{' '}
+                    <button type="button" className="underline" onClick={() => void availableModels.refetch()}>
+                      Retry
+                    </button>
+                  </p>
+                ) : availableModels.isPending ? (
+                  <div className="space-y-2 rounded-lg border border-border p-3" aria-label="Loading models">
+                    {Array.from({ length: 3 }).map((_, i) => (
+                      <Skeleton key={i} className="h-4 w-40" />
+                    ))}
+                  </div>
+                ) : models.length === 0 ? (
+                  <p className="text-xs text-text-tertiary">No models available.</p>
+                ) : (
+                  <div
+                    role="group"
+                    aria-label="Models"
+                    className="max-h-56 overflow-y-auto rounded-lg border border-border p-1.5"
+                  >
+                    {models.map((m) => (
+                      <label
+                        key={m.name}
+                        className="flex cursor-pointer items-center gap-3 rounded px-2 py-1.5 hover:bg-bg-tertiary"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedModels.has(m.name)}
+                          onChange={() => toggleModel(m.name)}
+                          className="accent-accent h-4 w-4 shrink-0 cursor-pointer"
+                          disabled={pending}
+                        />
+                        <span className="min-w-0 truncate font-mono text-sm text-text-primary">{m.name}</span>
+                        {m.type !== 'chat' && <span className="ml-auto text-xs text-text-tertiary">{m.type}</span>}
+                      </label>
+                    ))}
+                  </div>
+                )}
+                {modelsError && (
+                  <p className="mt-2 text-xs text-error" role="alert">
+                    {modelsError}
+                  </p>
+                )}
+                {selectedModels.size > 0 && (
+                  <p className="mt-2 text-xs text-text-tertiary">{selectedModels.size} selected</p>
+                )}
+              </div>
+            )}
+          </fieldset>
+        )}
+
+        {step === 'limits' && (
+          <>
+            {expirySelect}
+            <div className="border-t border-border pt-4">
+              <p className={`${sectionLabel} mb-3`}>Rate &amp; token limits</p>
+              <KeyLimitsFields value={limits} onChange={setLimits} disabled={pending} errors={limitErrors} />
+            </div>
+          </>
+        )}
+
+        {step === 'review' && (
+          <dl className="divide-y divide-border rounded-lg border border-border text-sm">
+            <ReviewRow label="Name">{name.trim()}</ReviewRow>
+            <ReviewRow label="Type">{typeLabel}</ReviewRow>
+            {showTeamPicker && teamName && <ReviewRow label="Team">{teamName}</ReviewRow>}
+            {keyType === 'sa_key' && <ReviewRow label="Service account">{serviceAccountName ?? serviceAccountId}</ReviewRow>}
+            <ReviewRow label="Models">
+              {restrictModels && selectedModels.size > 0 ? (
+                <span className="break-words font-mono text-xs">{Array.from(selectedModels).join(', ')}</span>
+              ) : (
+                'All models the org allows'
+              )}
+            </ReviewRow>
+            <ReviewRow label="Expires">{expiresLabel}</ReviewRow>
+            {canEditLimits && (
+              <ReviewRow label="Limits">
+                {setLimitsList.length === 0 ? (
+                  'No limits'
+                ) : (
+                  <ul className="space-y-0.5">
+                    {setLimitsList.map(({ key, label }) => (
+                      <li key={key}>
+                        {label}: {Number(limits[key]).toLocaleString()}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </ReviewRow>
+            )}
+          </dl>
+        )}
       </form>
     </Dialog>
+  )
+}
+
+function ReviewRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5 px-3 py-2 sm:flex-row sm:gap-4">
+      <dt className="shrink-0 text-text-tertiary sm:w-32">{label}</dt>
+      <dd className="min-w-0 text-text-primary">{children}</dd>
+    </div>
   )
 }

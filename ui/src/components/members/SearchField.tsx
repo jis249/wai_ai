@@ -21,6 +21,7 @@ export function SearchField({ value, onChange, label, placeholder, className }: 
       <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" aria-hidden="true" />
       <input
         type="search"
+        data-page-search
         aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}

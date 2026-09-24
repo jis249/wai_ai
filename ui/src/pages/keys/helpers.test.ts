@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { APIKeyResponse } from '../../hooks/useAPIKeys'
-import { filterKeys, keyActions, keyOwnerLabel, keyStatus, nextSort, sortKeys } from './helpers'
+import { filterKeys, keyActions, keyOwnerLabel, keyStatus, nextSort, sortKeys, validateLimits } from './helpers'
 import type { KeyStatusFilter, OwnerContext } from './helpers'
 
 const NOW = Date.parse('2026-09-24T00:00:00Z')
@@ -88,5 +88,13 @@ describe('keys helpers', () => {
       canRotate: false,
       canRevoke: true,
     })
+  })
+})
+
+describe('validateLimits', () => {
+  it('accepts blanks and whole numbers, rejects the rest', () => {
+    expect(validateLimits({ dailyTokenLimit: '', monthlyTokenLimit: '0', requestsPerMinute: ' 60 ', requestsPerDay: '' })).toEqual({})
+    const errors = validateLimits({ dailyTokenLimit: '-1', monthlyTokenLimit: '1.5', requestsPerMinute: 'abc', requestsPerDay: '10' })
+    expect(Object.keys(errors).sort()).toEqual(['dailyTokenLimit', 'monthlyTokenLimit', 'requestsPerMinute'])
   })
 })

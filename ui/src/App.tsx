@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import LoginPage from './pages/auth/LoginPage'
 import CallbackPage from './pages/auth/CallbackPage'
@@ -81,9 +81,11 @@ function HomeRoute() {
 
 function OrgIndexRedirect() {
   const { data, isLoading } = useMe()
+  const { search } = useLocation()
   if (isLoading) return null
   const isOrgAdmin = data?.role === 'org_admin' || data?.role === 'system_admin'
-  return <Navigate to={isOrgAdmin ? 'users' : 'settings'} replace />
+  // Keep the query (e.g. /org?invite=1 deep link) across the redirect.
+  return <Navigate to={{ pathname: isOrgAdmin ? 'users' : 'settings', search }} replace />
 }
 
 export default function App() {

@@ -138,6 +138,7 @@ export {
   Clock,
   Timer,
   // Theme
+  Keyboard,
   Moon,
   Sun,
 } from 'lucide-react'

@@ -1,32 +1,25 @@
 import { useMemo } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
 import { useMe } from '../../hooks/useMe'
 import { useTheme } from '../../hooks/useTheme'
-import apiClient from '../../api/client'
-import { LOCAL_STORAGE_KEY } from '../../lib/constants'
+import { isMac } from '../../hooks/useHotkeys'
 import { cn } from '../../lib/utils'
 import { ThemeToggle } from '../ui/ThemeToggle'
 import { IconButton } from '../ui/IconButton'
 import { Tooltip } from '../ui/Tooltip'
+import { useCommandCenter } from '../command/context'
+import { useLogout } from '../command/useLogout'
+import { Kbd } from '../command/Kbd'
+import { isItemActive, visibleNavigation } from './navigation'
 import {
-  Box,
-  Building2,
-  ChartColumn,
-  KeyRound,
-  LayoutDashboard,
   Lock,
   LogOut,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
-  Plug,
-  Server,
+  Search,
   Sun,
-  Terminal,
   User,
-  UserPlus,
-  Users,
   X,
 } from '../ui/icons'
 
@@ -35,107 +28,7 @@ function formatRole(role?: string): string {
   return role.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
 }
 
-interface NavItem {
-  label: string
-  path: string
-  icon: React.ReactNode
-  locked?: boolean
-  minRole?: string
-  end?: boolean
-  matchPrefixes?: string[]
-}
-
-interface NavGroup {
-  label: string
-  items: NavItem[]
-  minRole?: string
-}
-
-const roleLevel: Record<string, number> = {
-  member: 0,
-  team_admin: 1,
-  org_admin: 2,
-  system_admin: 3,
-}
-
-function hasMinRole(userRole: string, minRole?: string): boolean {
-  if (!minRole) return true
-  if (import.meta.env.DEV && !(userRole in roleLevel)) {
-    console.warn(`[Sidebar] Unknown role "${userRole}" — defaulting to member visibility`)
-  }
-  return (roleLevel[userRole] ?? 0) >= (roleLevel[minRole] ?? 0)
-}
-
 const navIconProps = { className: 'h-5 w-5 shrink-0', strokeWidth: 1.75, 'aria-hidden': true } as const
-
-function buildNavigation(userRole: string): NavGroup[] {
-  const isMember = userRole === 'member'
-  return [
-    {
-      label: 'Overview',
-      items: isMember
-        ? [{ label: 'Home', path: '/playground', icon: <Terminal {...navIconProps} /> }]
-        : [
-            { label: 'Dashboard', path: '/', icon: <LayoutDashboard {...navIconProps} /> },
-            { label: 'Playground', path: '/playground', icon: <Terminal {...navIconProps} /> },
-          ],
-    },
-    {
-      label: 'Manage',
-      items: [
-        {
-          label: 'API access',
-          path: '/keys',
-          icon: <KeyRound {...navIconProps} />,
-          matchPrefixes: ['/keys', '/service-accounts'],
-        },
-        { label: 'Models', path: '/models', icon: <Box {...navIconProps} />, end: false },
-        { label: 'Teams', path: '/teams', icon: <Users {...navIconProps} />, minRole: 'team_admin', end: false },
-        { label: 'MCP', path: '/mcp', icon: <Plug {...navIconProps} />, end: false, matchPrefixes: ['/mcp'] },
-      ],
-    },
-    {
-      label: 'Analytics',
-      items: [
-        {
-          label: 'Insights',
-          path: '/usage',
-          icon: <ChartColumn {...navIconProps} />,
-          end: false,
-          matchPrefixes: ['/usage'],
-        },
-      ],
-    },
-    {
-      label: '',
-      items: [
-        { label: 'Organization', path: '/org', icon: <Building2 {...navIconProps} />, end: false },
-      ],
-    },
-    {
-      label: 'System',
-      minRole: 'system_admin',
-      items: [
-        { label: 'Organizations', path: '/orgs', icon: <Building2 {...navIconProps} />, end: false },
-        { label: 'Users', path: '/users', icon: <UserPlus {...navIconProps} /> },
-        {
-          label: 'Platform',
-          path: '/platform',
-          icon: <Server {...navIconProps} />,
-          end: false,
-          matchPrefixes: ['/platform'],
-        },
-      ],
-    },
-  ]
-}
-
-function isItemActive(item: NavItem, pathname: string): boolean {
-  const matches = (p: string) => pathname === p || pathname.startsWith(`${p}/`)
-  if (item.matchPrefixes?.some(matches)) return true
-  const end = item.end !== undefined ? item.end : item.path === '/'
-  return end ? pathname === item.path : matches(item.path)
-}
 
 export interface SidebarProps {
   /** Icon-only rail (desktop only). */
@@ -161,7 +54,8 @@ export function Sidebar({
   onNavigate,
 }: SidebarProps) {
   const { data } = useMe()
-  const queryClient = useQueryClient()
+  const commandCenter = useCommandCenter()
+  const handleLogout = useLogout()
   const location = useLocation()
   const { theme, toggleTheme } = useTheme()
 
@@ -171,24 +65,8 @@ export function Sidebar({
   const userName = data?.display_name || data?.email || '...'
   const nextTheme = theme === 'dark' ? 'light' : 'dark'
 
-  const visibleGroups = useMemo(() => {
-    const navigation = buildNavigation(userRole)
-    return navigation
-      .filter(group => hasMinRole(userRole, group.minRole))
-      .map(group => ({
-        ...group,
-        items: group.items.filter(item => hasMinRole(userRole, item.minRole)),
-      }))
-      .filter(group => group.items.length > 0)
-  }, [userRole])
-
-  async function handleLogout() {
-    // Revoke the session server-side; ignore failures so logout always completes.
-    await apiClient<void>('/auth/logout', { method: 'POST' }).catch(() => {})
-    localStorage.removeItem(LOCAL_STORAGE_KEY)
-    queryClient.clear()
-    window.location.href = '/login'
-  }
+  const visibleGroups = useMemo(() => visibleNavigation(userRole), [userRole])
+  const showSearch = !isDrawer && commandCenter !== null
 
   return (
     <aside
@@ -226,6 +104,32 @@ export function Sidebar({
         )}
       </div>
 
+      {showSearch && (
+        <div className={cn('shrink-0 pt-3', collapsed ? 'flex justify-center px-2' : 'px-3')}>
+          {collapsed ? (
+            <IconButton
+              aria-label="Search"
+              aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}
+              icon={<Search />}
+              onClick={commandCenter.openPalette}
+              tooltip={<span className="inline-flex items-center gap-2">Search <Kbd keys="mod+k" /></span>}
+              tooltipSide="right"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={commandCenter.openPalette}
+              aria-keyshortcuts={isMac() ? 'Meta+K' : 'Control+K'}
+              className="flex w-full items-center gap-2 rounded-md border border-border bg-bg-primary/40 px-3 py-1.5 text-sm text-text-tertiary transition-colors hover:border-accent/40 hover:text-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span className="flex-1 text-left">Search…</span>
+              <Kbd keys="mod+k" />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Navigation */}
       <nav className={cn('flex-1 flex flex-col gap-0.5 overflow-y-auto', collapsed ? 'p-2' : 'p-3')}>
         {visibleGroups.map((group, groupIndex) => (
@@ -255,7 +159,7 @@ export function Sidebar({
                         : 'text-text-secondary hover:bg-bg-tertiary hover:text-text-primary',
                   )}
                 >
-                  {item.icon}
+                  <item.icon {...navIconProps} />
                   {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
                   {!collapsed && item.locked && <Lock className="h-3 w-3 shrink-0 opacity-50" aria-hidden="true" />}
                 </Link>

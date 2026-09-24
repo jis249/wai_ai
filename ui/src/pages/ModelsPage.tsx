@@ -24,6 +24,7 @@ import { errorMessage } from '../lib/errors'
 import { ModelDetailDialog } from './ModelDetailDialog'
 import { ModelsTable } from './models/ModelsTable'
 import { CreateModelSheet } from './models/CreateModelSheet'
+import { DeepLinkParam } from '../components/onboarding/DeepLinkParam'
 import { EditModelSheet } from './models/EditModelSheet'
 import { DeploymentDialog } from './models/DeploymentDialog'
 import { modelMatchesSearch, nextSort, sortModels } from './models/modelHelpers'
@@ -269,6 +270,7 @@ export default function ModelsPage({ readOnly = false, hideHeader = false }: Mod
 
       {!readOnly && (
         <>
+          <DeepLinkParam name="new" onMatch={() => setShowCreate(true)} />
           {showCreate && <CreateModelSheet onClose={() => setShowCreate(false)} />}
 
           {editModel !== null && <EditModelSheet model={editModel} onClose={() => setEditModel(null)} />}

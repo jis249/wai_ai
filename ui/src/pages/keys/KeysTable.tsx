@@ -39,6 +39,12 @@ interface KeysTableProps {
   onRevoke: (key: APIKeyResponse) => void
   pagination?: PaginationState
   emptyState?: React.ReactNode
+  /** Row selection for bulk actions; rows where `isSelectable` is false get no checkbox. */
+  selection?: {
+    selected: ReadonlySet<string>
+    onToggle: (row: APIKeyResponse) => void
+    isSelectable: (row: APIKeyResponse) => boolean
+  }
 }
 
 export function KeysTable({
@@ -55,8 +61,30 @@ export function KeysTable({
   onRevoke,
   pagination,
   emptyState,
+  selection,
 }: KeysTableProps) {
+  const selectColumn: Column<APIKeyResponse>[] = selection
+    ? [
+        {
+          key: 'select',
+          header: '',
+          width: 'w-10',
+          render: (row) =>
+            selection.isSelectable(row) ? (
+              <input
+                type="checkbox"
+                className="accent-accent h-4 w-4 cursor-pointer align-middle"
+                checked={selection.selected.has(row.id)}
+                onChange={() => selection.onToggle(row)}
+                aria-label={`Select ${row.name}`}
+                disabled={busy}
+              />
+            ) : null,
+        },
+      ]
+    : []
   const columns: Column<APIKeyResponse>[] = [
+    ...selectColumn,
     {
       key: 'name',
       header: 'Name',

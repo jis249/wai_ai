@@ -177,4 +177,22 @@ describe('useChatStream', () => {
     expect(result.current.messages[1].metrics?.ttftMs).toBeUndefined()
     expect(result.current.metrics?.totalTokens).toBe(7)
   })
+
+  it('adds response_format only when given', async () => {
+    const fetchMock = vi.fn(async () => sseResponse([delta('{}')]))
+    vi.stubGlobal('fetch', fetchMock)
+    const { result } = renderHook(() => useChatStream())
+    await act(async () => {
+      await result.current.send('first', params)
+    })
+    expect(bodyOf(fetchMock, 0)).not.toHaveProperty('response_format')
+    const responseFormat = {
+      type: 'json_schema' as const,
+      json_schema: { name: 'r', schema: { type: 'object' }, strict: true },
+    }
+    await act(async () => {
+      await result.current.send('second', { ...params, responseFormat })
+    })
+    expect(bodyOf(fetchMock, 1).response_format).toEqual(responseFormat)
+  })
 })

@@ -16,6 +16,7 @@ import type { UserResponse } from '../../hooks/useUsers'
 import { errorMessage } from '../../lib/errors'
 import { MembersTable } from './MembersTable'
 import { InviteUserDialog } from './InviteUserDialog'
+import { DeepLinkParam } from '../onboarding/DeepLinkParam'
 import { ChangeRoleDialog } from './ChangeRoleDialog'
 import { RemoveMemberDialog } from './RemoveMemberDialog'
 import { useCursorPager } from './listState'
@@ -126,6 +127,7 @@ export function OrgMembersPanel({ orgId }: { orgId: string }) {
         }
       />
 
+      {perms.canManageMembers && <DeepLinkParam name="invite" onMatch={() => setShowInvite(true)} />}
       <InviteUserDialog open={showInvite} onClose={() => setShowInvite(false)} orgId={orgId} roleOptions={roleOptions} />
 
       <ChangeRoleDialog

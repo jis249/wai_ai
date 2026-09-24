@@ -8,8 +8,14 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { SegmentedControl } from '../components/ui/SegmentedControl'
 import { TimeRangePicker } from '../components/ui/TimeRangePicker'
 import { Cpu, DollarSign, Info, Receipt, TrendingDown } from '../components/ui/icons'
+import { Toggle } from '../components/ui/Toggle'
+import { TimeSeriesChart } from '../components/ui/charts/TimeSeriesChart'
+import { ChartSection } from '../components/analytics/ChartSection'
 import { ExportButtons } from '../components/analytics/ExportButtons'
+import { SpendBudgetCard } from '../components/analytics/SpendBudgetCard'
 import { StatCardSkeletons } from '../components/analytics/StatCardSkeletons'
+import { buildCompareSeries } from '../components/analytics/compareSeries'
+import { previousWindow } from '../components/analytics/timeSeries'
 import { useMe } from '../hooks/useMe'
 import { useUsage, useMyUsage } from '../hooks/useUsage'
 import type { UsageDataPoint } from '../hooks/useUsage'
@@ -201,6 +207,7 @@ const dayColumns = (formatCost: (amountUsd: number) => string): Column<DayCostRo
 export default function CostReportsPage({ hideHeader = false }: { hideHeader?: boolean }) {
   const [range, setRange] = useState<TimeRangeValue>('30d')
   const [currency, setCurrency] = useState<CostCurrency>(readStoredCurrency)
+  const [compare, setCompare] = useState(false)
   const { data: me } = useMe()
   const orgId = me?.org_id ?? ''
   const canViewOrgUsage = me?.is_system_admin === true || me?.role === 'org_admin'
@@ -215,6 +222,27 @@ export default function CostReportsPage({ hideHeader = false }: { hideHeader?: b
   const dayQuery = canViewOrgUsage ? orgDayUsage : myDayUsage
   const { data: modelUsage, isLoading: modelLoading } = modelQuery
   const { data: dayUsage, isLoading: dayLoading } = dayQuery
+
+  // Previous window (same length, just before `from`) for the dashed comparison series.
+  const prev = useMemo(() => previousWindow(from, to), [from, to])
+  const orgPrevDay = useUsage(orgId, prev.from, prev.to, 'day', !!me && canViewOrgUsage && compare)
+  const myPrevDay = useMyUsage(prev.from, prev.to, 'day', !!me && !canViewOrgUsage && compare)
+  const prevDayData = (canViewOrgUsage ? orgPrevDay : myPrevDay).data?.data
+
+  const dayPoints = useMemo(
+    () =>
+      buildCompareSeries({
+        from,
+        to,
+        granularity: 'day',
+        current: (dayUsage?.data ?? []).map((d) => ({ key: d.group_key, value: costForDailyUsage(d) })),
+        previous:
+          compare && prevDayData != null
+            ? prevDayData.map((d) => ({ key: d.group_key, value: costForDailyUsage(d) }))
+            : null,
+      }),
+    [from, to, dayUsage, compare, prevDayData],
+  )
 
   // Compute totals and model rows
   const { totalCost, modelRows, avgCostPerDay, topModel } = useMemo(() => {
@@ -366,6 +394,8 @@ export default function CostReportsPage({ hideHeader = false }: { hideHeader?: b
             )}
           </div>
 
+          {canViewOrgUsage && orgId !== '' && <SpendBudgetCard orgId={orgId} formatCost={formatCost} className="mb-8" />}
+
           {/* Cost by Model */}
           <section className="mb-8" aria-labelledby="cost-by-model">
             <h2 id="cost-by-model" className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-4">
@@ -396,13 +426,44 @@ export default function CostReportsPage({ hideHeader = false }: { hideHeader?: b
             retrying={dayQuery.isFetching}
           />
         ) : (
-          <Table<DayCostRow>
-            columns={dailyColumns}
-            data={dayRowsDesc}
-            keyExtractor={(row) => row.group_key}
-            loading={isDayLoading}
-            emptyState={noCost('No daily costs were recorded in the selected time range.')}
-          />
+          <div className="space-y-4">
+            <ChartSection
+              title="Cost per day"
+              description="Estimated cost per UTC day."
+              query={dayQuery}
+              loading={isDayLoading}
+              isEmpty={dayRows.length === 0 && !(compare && (prevDayData ?? []).length > 0)}
+              emptyTitle="No cost data"
+              emptyDescription="No daily costs were recorded in the selected time range."
+              errorTitle="Couldn't load daily costs"
+              actions={
+                <Toggle
+                  checked={compare}
+                  onChange={setCompare}
+                  size="sm"
+                  label="Compare to previous period"
+                  aria-label="Compare to previous period"
+                />
+              }
+            >
+              <TimeSeriesChart
+                ariaLabel="Estimated cost per day"
+                data={dayPoints}
+                height={220}
+                formatValue={formatCost}
+                seriesLabel="This period"
+                previousLabel="Previous period"
+                showPrevious={compare}
+              />
+            </ChartSection>
+            <Table<DayCostRow>
+              columns={dailyColumns}
+              data={dayRowsDesc}
+              keyExtractor={(row) => row.group_key}
+              loading={isDayLoading}
+              emptyState={noCost('No daily costs were recorded in the selected time range.')}
+            />
+          </div>
         )}
       </section>
     </div>

@@ -12,10 +12,12 @@ interface KeyLimitsFieldsProps {
   value: KeyLimitsValue
   onChange: (value: KeyLimitsValue) => void
   disabled?: boolean
+  /** Per-field validation messages. */
+  errors?: Partial<Record<keyof KeyLimitsValue, string>>
 }
 
 /** Token / rate limit inputs shared by the create and edit dialogs. */
-export function KeyLimitsFields({ value, onChange, disabled }: KeyLimitsFieldsProps) {
+export function KeyLimitsFields({ value, onChange, disabled, errors }: KeyLimitsFieldsProps) {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       {FIELDS.map((f) => (
@@ -29,6 +31,7 @@ export function KeyLimitsFields({ value, onChange, disabled }: KeyLimitsFieldsPr
           onChange={(e) => onChange({ ...value, [f.key]: e.target.value })}
           placeholder="0 = unlimited"
           disabled={disabled}
+          error={errors?.[f.key]}
         />
       ))}
     </div>

@@ -25,7 +25,10 @@ import { RotateKeyDialog } from './keys/RotateKeyDialog'
 import { KeyRevealDialog } from './keys/KeyRevealDialog'
 import { TypeToConfirmDialog } from './keys/TypeToConfirmDialog'
 import { KeysTable } from './keys/KeysTable'
-import { filterKeys, keyStatus, nextSort, sortKeys } from './keys/helpers'
+import { BulkRevokeBar, BulkRevokeProgress } from './keys/BulkRevokeBar'
+import { useBulkRevoke } from './keys/useBulkRevoke'
+import { DeepLinkParam } from '../components/onboarding/DeepLinkParam'
+import { filterKeys, keyActions, keyStatus, nextSort, sortKeys } from './keys/helpers'
 import type { KeySort, KeyStatusFilter, OwnerContext } from './keys/helpers'
 
 const STATUS_FILTERS: { value: KeyStatusFilter; label: string }[] = [
@@ -57,6 +60,8 @@ export default function KeysPage({ hideHeader = false }: { hideHeader?: boolean 
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<KeyStatusFilter>('all')
   const [sort, setSort] = useState<KeySort | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false)
   // Status math uses the fetch time of the list (refreshes on refetch; keeps render pure).
   const [mountedAt] = useState(() => Date.now())
 
@@ -100,6 +105,52 @@ export default function KeysPage({ hideHeader = false }: { hideHeader?: boolean 
     () => sortKeys(filterKeys(allKeys, { query, status: statusFilter, now, owner }), sort, owner, now),
     [allKeys, query, statusFilter, now, owner, sort],
   )
+
+  const canRevokeRow = (k: APIKeyResponse) => keyActions(k, { meId: me?.id, canManageAnyKey }).canRevoke
+  // Selection is limited to revocable rows currently shown (current page + filters).
+  const selectableRows = visibleKeys.filter(canRevokeRow)
+  const selectedRows = selectableRows.filter((k) => selectedIds.has(k.id))
+  const allSelected = selectableRows.length > 0 && selectedRows.length === selectableRows.length
+
+  const bulk = useBulkRevoke((id) => deleteKey.mutateAsync(id))
+  const bulkCount = bulk.running ? bulk.progress.total : selectedRows.length
+
+  function toggleRow(row: APIKeyResponse) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(row.id)) next.delete(row.id)
+      else next.add(row.id)
+      return next
+    })
+  }
+
+  function toggleAll() {
+    setSelectedIds(allSelected ? new Set() : new Set(selectableRows.map((k) => k.id)))
+  }
+
+  function changePage(update: () => void) {
+    setSelectedIds(new Set())
+    update()
+  }
+
+  async function handleBulkRevoke() {
+    const targets = selectedRows
+    const result = await bulk.run(targets)
+    setBulkConfirmOpen(false)
+    // Keep failures selected so they can be retried.
+    setSelectedIds(new Set(result.failed.map((f) => f.key.id)))
+    const ok = result.succeeded.length
+    if (result.failed.length === 0) {
+      toast({ variant: 'success', message: `Revoked ${ok} ${ok === 1 ? 'key' : 'keys'}` })
+    } else {
+      const details = result.failed.map((f) => `"${f.key.name}": ${f.message}`).join('; ')
+      toast({
+        variant: 'error',
+        message: `Revoked ${ok} of ${targets.length} keys. ${result.failed.length} failed: ${details}`,
+        duration: 10000,
+      })
+    }
+  }
 
   function handleRevoke() {
     if (!revokeTarget) return
@@ -174,6 +225,16 @@ export default function KeysPage({ hideHeader = false }: { hideHeader?: boolean 
             <SegmentedControl aria-label="Filter by status" size="sm" options={STATUS_FILTERS} value={statusFilter} onChange={setStatusFilter} />
           </div>
         </div>
+        {selectableRows.length > 0 && (
+          <BulkRevokeBar
+            selectedCount={selectedRows.length}
+            allSelected={allSelected}
+            onToggleAll={toggleAll}
+            onRevoke={() => setBulkConfirmOpen(true)}
+            onClear={() => setSelectedIds(new Set())}
+            disabled={bulk.running}
+          />
+        )}
         {keys?.has_more && filtersActive && (
           <p className="mb-2 text-xs text-text-tertiary">Search and filters apply to the keys on this page.</p>
         )}
@@ -185,10 +246,11 @@ export default function KeysPage({ hideHeader = false }: { hideHeader?: boolean 
           canManageAnyKey={canManageAnyKey}
           sort={sort}
           onSort={(col) => setSort((s) => nextSort(s, col))}
-          busy={deleteKey.isPending || rotateKey.isPending}
+          busy={deleteKey.isPending || rotateKey.isPending || bulk.running}
           onEdit={setEditKey}
           onRotate={setRotateTarget}
           onRevoke={setRevokeTarget}
+          selection={{ selected: selectedIds, onToggle: toggleRow, isSelectable: canRevokeRow }}
           emptyState={
             filtersActive ? (
               <EmptyState
@@ -210,15 +272,20 @@ export default function KeysPage({ hideHeader = false }: { hideHeader?: boolean 
             hasMore: keys?.has_more ?? false,
             hasPrevious: prevCursors.length > 0,
             onNext: () => {
-              if (keys?.next_cursor) {
-                setPrevCursors((prev) => [...prev, cursor ?? ''])
-                setCursor(keys.next_cursor)
+              const next = keys?.next_cursor
+              if (next) {
+                changePage(() => {
+                  setPrevCursors((prev) => [...prev, cursor ?? ''])
+                  setCursor(next)
+                })
               }
             },
             onPrevious: () => {
               const prev = prevCursors[prevCursors.length - 1]
-              setPrevCursors((p) => p.slice(0, -1))
-              setCursor(prev || undefined)
+              changePage(() => {
+                setPrevCursors((p) => p.slice(0, -1))
+                setCursor(prev || undefined)
+              })
             },
           }}
         />
@@ -251,12 +318,38 @@ export default function KeysPage({ hideHeader = false }: { hideHeader?: boolean 
 
       {body}
 
+      <DeepLinkParam name="new" onMatch={() => setShowCreateDialog(true)} />
       <CreateKeyDialog
         open={showCreateDialog}
         onClose={() => setShowCreateDialog(false)}
         onCreated={(key, created) => setReveal({ key, name: created.name, title: 'API key created' })}
         orgId={orgId}
+        canEditLimits={canManageAnyKey}
       />
+
+      {bulkConfirmOpen && (
+        <TypeToConfirmDialog
+          open
+          onClose={() => {
+            if (!bulk.running) setBulkConfirmOpen(false)
+          }}
+          onConfirm={() => void handleBulkRevoke()}
+          title={`Revoke ${bulkCount} API ${bulkCount === 1 ? 'key' : 'keys'}`}
+          description={
+            bulk.running ? (
+              <BulkRevokeProgress done={bulk.progress.done} total={bulk.progress.total} />
+            ) : (
+              <>
+                This action cannot be undone. Any application using {bulkCount === 1 ? 'this key' : 'these keys'} will
+                lose access immediately.
+              </>
+            )
+          }
+          confirmText={String(bulkCount)}
+          confirmLabel="Revoke"
+          loading={bulk.running}
+        />
+      )}
 
       {reveal && (
         <KeyRevealDialog

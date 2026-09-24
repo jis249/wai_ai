@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { parseProxyError, playgroundToken, truncateError } from './proxy'
+import type { ResponseFormatWire } from './responseFormat'
 
 export interface ChatParams {
   model: string
@@ -9,6 +10,8 @@ export interface ChatParams {
   stream: boolean
   /** Optional key override; empty uses the dashboard session. */
   apiKey: string
+  /** Structured output. Omitted from the request body when undefined (plain text). */
+  responseFormat?: ResponseFormatWire
 }
 
 export interface MessageMetrics {
@@ -157,6 +160,7 @@ export function useChatStream(options: UseChatStreamOptions = {}) {
             stream: params.stream,
             temperature: params.temperature,
             max_tokens: params.maxTokens,
+            ...(params.responseFormat ? { response_format: params.responseFormat } : {}),
           }),
           signal: controller.signal,
         })

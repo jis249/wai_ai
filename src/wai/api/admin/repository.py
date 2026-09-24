@@ -1328,3 +1328,128 @@ async def count_org_admins(db: Database, org_id: str) -> int:
         (org_id,),
     )
     return int(row["c"]) if row else 0
+
+
+# --- Dashboard KPIs (request_logs) -------------------------------------------------------
+#
+# request_logs.created_at is TEXT in '%Y-%m-%dT%H:%M:%S+00:00' (UTC) form, so window bounds
+# are compared as text in that same format and buckets are text prefixes of it
+# (13 chars = 'YYYY-MM-DDTHH', 10 chars = 'YYYY-MM-DD'). This keeps the range predicate
+# sargable on idx_request_logs_org_created / idx_request_logs_created_at.
+
+KPI_BUCKET_PREFIX_LEN = {"hour": 13, "day": 10}
+
+_KPI_ERROR_PRED = "r.status_code < 200 OR r.status_code >= 300"
+
+
+def postgres_percentile(fraction: float) -> str:
+    """Continuous percentile of latency_ms (PostgreSQL ordered-set aggregate)."""
+    return f"percentile_cont({fraction}) WITHIN GROUP (ORDER BY r.latency_ms)"
+
+
+def request_log_scope_sql(
+    org_id: str, team_id: str, user_id: str
+) -> tuple[str, list[str], list[Any]]:
+    """JOIN + WHERE fragments restricting request_logs to a dashboard scope.
+
+    Empty ``org_id`` means all orgs (system admin). team/user scope goes through the
+    owning API key, mirroring /usage/request-logs.
+    """
+    join = ""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if org_id:
+        clauses.append("r.org_id = ?")
+        params.append(org_id)
+    if team_id or user_id:
+        join = " JOIN api_keys k ON k.id = r.key_id"
+    if team_id:
+        clauses.append("k.team_id = ?")
+        params.append(team_id)
+    if user_id:
+        clauses.append("k.user_id = ?")
+        params.append(user_id)
+    return join, clauses, params
+
+
+def build_kpi_totals_sql(
+    org_id: str, team_id: str, user_id: str, from_ts: str, to_ts: str,
+    *, percentile=postgres_percentile,
+) -> tuple[str, tuple[Any, ...]]:
+    join, scope, scope_params = request_log_scope_sql(org_id, team_id, user_id)
+    where = " AND ".join(["r.created_at >= ?", "r.created_at < ?", *scope])
+    sql = (
+        "SELECT COUNT(*) AS requests,"
+        f" COALESCE(SUM(CASE WHEN {_KPI_ERROR_PRED} THEN 1 ELSE 0 END), 0) AS errors,"
+        " COALESCE(SUM(r.prompt_tokens + r.completion_tokens), 0) AS tokens,"
+        " COALESCE(SUM(r.cost_usd), 0) AS cost_usd,"
+        " COALESCE(SUM(CASE WHEN r.cache_hit <> 0 THEN 1 ELSE 0 END), 0) AS cache_hits,"
+        f" {percentile(0.5)} AS latency_p50_ms,"
+        f" {percentile(0.95)} AS latency_p95_ms"
+        f" FROM request_logs r{join}"
+        f" WHERE {where}"
+    )
+    return sql, (from_ts, to_ts, *scope_params)
+
+
+def build_kpi_series_sql(
+    org_id: str, team_id: str, user_id: str, from_ts: str, to_ts: str, granularity: str,
+    *, percentile=postgres_percentile,
+) -> tuple[str, tuple[Any, ...]]:
+    n = KPI_BUCKET_PREFIX_LEN[granularity]
+    bucket = f"SUBSTR(r.created_at, 1, {n})"
+    join, scope, scope_params = request_log_scope_sql(org_id, team_id, user_id)
+    where = " AND ".join(["r.created_at >= ?", "r.created_at < ?", *scope])
+    sql = (
+        f"SELECT {bucket} AS bucket,"
+        " COUNT(*) AS requests,"
+        f" COALESCE(SUM(CASE WHEN {_KPI_ERROR_PRED} THEN 1 ELSE 0 END), 0) AS errors,"
+        " COALESCE(SUM(r.prompt_tokens + r.completion_tokens), 0) AS tokens,"
+        " COALESCE(SUM(r.cost_usd), 0) AS cost_usd,"
+        f" {percentile(0.95)} AS latency_p95_ms"
+        f" FROM request_logs r{join}"
+        f" WHERE {where}"
+        f" GROUP BY {bucket}"
+        f" ORDER BY {bucket}"
+    )
+    return sql, (from_ts, to_ts, *scope_params)
+
+
+async def get_request_log_kpi_totals(
+    db: Database, org_id: str, team_id: str, user_id: str, from_ts: str, to_ts: str,
+) -> dict[str, Any]:
+    sql, params = build_kpi_totals_sql(org_id, team_id, user_id, from_ts, to_ts)
+    row = await db.fetchone(sql, params)
+    return dict(row) if row else {}
+
+
+async def get_request_log_kpi_series(
+    db: Database, org_id: str, team_id: str, user_id: str, from_ts: str, to_ts: str,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    sql, params = build_kpi_series_sql(org_id, team_id, user_id, from_ts, to_ts, granularity)
+    rows = await db.fetchall(sql, params)
+    return [dict(r) for r in rows]
+
+
+# --- Onboarding status ---------------------------------------------------------------------
+
+ONBOARDING_STATUS_SQL = """SELECT
+    EXISTS (SELECT 1 FROM models WHERE deleted_at IS NULL AND is_active = 1) AS has_models,
+    EXISTS (SELECT 1 FROM api_keys WHERE org_id = ? AND deleted_at IS NULL) AS has_keys,
+    EXISTS (SELECT 1 FROM request_logs WHERE org_id = ?) AS has_requests,
+    (EXISTS (SELECT 1 FROM organizations WHERE id = ? AND monthly_spend_limit > 0)
+     OR EXISTS (SELECT 1 FROM teams
+                WHERE org_id = ? AND deleted_at IS NULL AND monthly_spend_limit > 0)
+     OR EXISTS (SELECT 1 FROM api_keys
+                WHERE org_id = ? AND deleted_at IS NULL AND monthly_spend_limit > 0)
+    ) AS has_budget,
+    (SELECT COUNT(*) FROM (SELECT 1 FROM org_memberships WHERE org_id = ? LIMIT 2) m) > 1
+        AS has_members"""
+
+
+async def get_onboarding_status(db: Database, org_id: str) -> dict[str, bool]:
+    row = await db.fetchone(ONBOARDING_STATUS_SQL, (org_id,) * 6)
+    row = dict(row) if row else {}
+    keys = ("has_models", "has_keys", "has_requests", "has_budget", "has_members")
+    return {k: bool(row.get(k)) for k in keys}

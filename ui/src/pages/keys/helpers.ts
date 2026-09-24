@@ -62,6 +62,18 @@ export const EMPTY_LIMITS: KeyLimitsValue = {
   requestsPerDay: '',
 }
 
+export type LimitErrors = Partial<Record<keyof KeyLimitsValue, string>>
+
+/** Blank is fine (unlimited); anything else must be a whole number >= 0. */
+export function validateLimits(limits: KeyLimitsValue): LimitErrors {
+  const errors: LimitErrors = {}
+  for (const key of Object.keys(limits) as (keyof KeyLimitsValue)[]) {
+    const v = limits[key].trim()
+    if (v && !/^\d+$/.test(v)) errors[key] = 'Enter a whole number (0 = unlimited)'
+  }
+  return errors
+}
+
 /** Existing limits as form strings (0 = unlimited shows as blank). */
 export function limitsFromKey(k: Pick<APIKeyResponse, 'daily_token_limit' | 'monthly_token_limit' | 'requests_per_minute' | 'requests_per_day'>): KeyLimitsValue {
   const s = (n: number) => (n > 0 ? String(n) : '')

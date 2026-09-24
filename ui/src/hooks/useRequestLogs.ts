@@ -24,6 +24,9 @@ export interface RequestLogsPage {
   has_more: boolean
   next_before: string
   next_before_id: string
+  /** Newest row in this response (live-tail cursor), '' when empty. */
+  latest_created_at?: string
+  latest_id?: string
 }
 
 export type RequestLogStatusFilter = 'success' | 'error'
@@ -46,13 +49,28 @@ interface Cursor {
   before_id: string
 }
 
+/** Live-tail cursor: only rows strictly newer than (created_at, id). */
+export interface AfterCursor {
+  after: string
+  after_id: string
+}
+
 /** Build the `/usage/request-logs` query string (exported for tests). */
-export function buildRequestLogsQuery(filters: RequestLogFilters, cursor: Cursor | null, limit = REQUEST_LOGS_PAGE_SIZE): string {
+export function buildRequestLogsQuery(
+  filters: RequestLogFilters,
+  cursor: Cursor | null,
+  limit = REQUEST_LOGS_PAGE_SIZE,
+  after: AfterCursor | null = null,
+): string {
   const params = new URLSearchParams()
   params.set('limit', String(limit))
   if (cursor) {
     params.set('before', cursor.before)
     if (cursor.before_id) params.set('before_id', cursor.before_id)
+  }
+  if (after) {
+    params.set('after', after.after)
+    if (after.after_id) params.set('after_id', after.after_id)
   }
   if (filters.model) params.set('model', filters.model)
   if (filters.status) params.set('status', filters.status)
@@ -79,6 +97,17 @@ export function useRequestLogs(filters: RequestLogFilters = {}) {
     getNextPageParam: (last): Cursor | undefined =>
       last.has_more && last.next_before ? { before: last.next_before, before_id: last.next_before_id } : undefined,
   })
+}
+
+export const LIVE_TAIL_PAGE_SIZE = 200
+
+/** One live-tail poll: rows newer than `after` (newest first), same filters. */
+export function fetchRequestLogsAfter(
+  filters: RequestLogFilters,
+  after: AfterCursor,
+  limit = LIVE_TAIL_PAGE_SIZE,
+): Promise<RequestLogsPage> {
+  return apiClient<RequestLogsPage>(`/usage/request-logs?${buildRequestLogsQuery(filters, null, limit, after)}`)
 }
 
 /** Mirrors the backend `status=success` filter: 2xx is success, everything else is an error. */

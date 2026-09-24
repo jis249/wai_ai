@@ -18,6 +18,7 @@ import { useToast } from '../hooks/useToast'
 import { errorMessage } from '../lib/errors'
 import { ServersTable } from './mcp/ServersTable'
 import { CreateServerSheet } from './mcp/CreateServerSheet'
+import { DeepLinkParam } from '../components/onboarding/DeepLinkParam'
 import { EditServerSheet } from './mcp/EditServerSheet'
 import { canWriteServer, filterServers, nextSort, sortServers } from './mcp/helpers'
 import type { ServerSort } from './mcp/helpers'
@@ -166,6 +167,7 @@ export default function MCPServersPage({ hideHeader = false }: { hideHeader?: bo
         />
       )}
 
+      {perms.isReady && canCreate && <DeepLinkParam name="new" onMatch={() => setShowCreate(true)} />}
       {showCreate && (
         <CreateServerSheet
           open={showCreate}

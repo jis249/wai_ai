@@ -4,6 +4,7 @@ import {
   buildJavaScriptSnippet,
   buildPythonSnippet,
   maskKey,
+  pyLiteral,
   playgroundSnippetParams,
   resolveProxyBaseUrl,
 } from './codeSnippets'
@@ -104,5 +105,49 @@ describe('playgroundSnippetParams', () => {
     expect(p.apiKey).toBe('YOUR_API_KEY')
     expect(p.model).toBe('your-model-name')
     expect(p.messages).toEqual([{ role: 'user', content: 'Hello!' }])
+  })
+})
+
+describe('response_format in snippets', () => {
+  const rf = {
+    type: 'json_schema' as const,
+    json_schema: { name: 'person', schema: { type: 'object', additionalProperties: false, required: ['name'] }, strict: true },
+  }
+
+  it('curl includes response_format in the JSON body', () => {
+    const s = buildCurlSnippet({ ...base, responseFormat: rf })
+    expect(s).toContain('"response_format": {')
+    expect(s).toContain('"type": "json_schema"')
+    expect(s).toContain('"strict": true')
+    expect(buildCurlSnippet(base)).not.toContain('response_format')
+  })
+
+  it('python renders a Python literal (True/False)', () => {
+    const s = buildPythonSnippet({ ...base, responseFormat: rf })
+    expect(s).toContain('    response_format={')
+    expect(s).toContain('"strict": True,')
+    expect(s).toContain('"additionalProperties": False,')
+    expect(s).not.toContain('true')
+    expect(pyLiteral({ a: null, b: [1, 'x'] }, 0)).toBe(
+      ['{', '    "a": None,', '    "b": [', '        1,', '        "x",', '    ],', '}'].join('\n'),
+    )
+  })
+
+  it('javascript includes response_format', () => {
+    const s = buildJavaScriptSnippet({ ...base, responseFormat: { type: 'json_object' } })
+    expect(s).toContain('response_format: {')
+    expect(s).toContain('"type": "json_object"')
+  })
+
+  it('playgroundSnippetParams only adds response_format when chosen', () => {
+    const params = { systemPrompt: '', temperature: 1, maxTokens: 10, stream: false, apiKey: '' }
+    expect(playgroundSnippetParams('m', params, [], 'https://x/v1')).not.toHaveProperty('responseFormat')
+    const withText = { ...params, responseFormat: { type: 'text' as const, schemaName: 'r', schema: '{}', strict: true } }
+    expect(playgroundSnippetParams('m', withText, [], 'https://x/v1')).not.toHaveProperty('responseFormat')
+    const withSchema = { ...params, responseFormat: { type: 'json_schema' as const, schemaName: 'r', schema: '{"type":"object"}', strict: false } }
+    expect(playgroundSnippetParams('m', withSchema, [], 'https://x/v1').responseFormat).toEqual({
+      type: 'json_schema',
+      json_schema: { name: 'r', schema: { type: 'object' }, strict: false },
+    })
   })
 })

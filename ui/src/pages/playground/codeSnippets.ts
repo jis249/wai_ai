@@ -1,6 +1,8 @@
 import { KEY_PREFIXES } from '../../lib/constants'
 import type { ParametersValue } from './ParametersPanel'
 import type { ChatMessage } from './useChatStream'
+import { buildResponseFormat } from './responseFormat'
+import type { ResponseFormatWire } from './responseFormat'
 
 export type SnippetLanguage = 'curl' | 'python' | 'javascript'
 
@@ -18,6 +20,8 @@ export interface ChatSnippetParams {
   temperature?: number
   maxTokens?: number
   stream?: boolean
+  /** OpenAI `response_format`; omitted when undefined. */
+  responseFormat?: ResponseFormatWire
 }
 
 export const API_KEY_PLACEHOLDER = 'YOUR_API_KEY'
@@ -41,6 +45,7 @@ function requestBody(p: ChatSnippetParams): Record<string, unknown> {
   if (p.temperature !== undefined) body.temperature = p.temperature
   if (p.maxTokens !== undefined) body.max_tokens = p.maxTokens
   if (p.stream) body.stream = true
+  if (p.responseFormat) body.response_format = p.responseFormat
   return body
 }
 
@@ -72,6 +77,24 @@ function py(value: string): string {
   return JSON.stringify(value)
 }
 
+/** A JSON value as a Python literal (True/False/None), indented like the call arguments. */
+export function pyLiteral(value: unknown, level = 1): string {
+  const pad = '    '.repeat(level)
+  const inner = '    '.repeat(level + 1)
+  if (value === null || value === undefined) return 'None'
+  if (value === true) return 'True'
+  if (value === false) return 'False'
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'None'
+  if (typeof value === 'string') return py(value)
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]'
+    return `[\n${value.map((v) => `${inner}${pyLiteral(v, level + 1)},`).join('\n')}\n${pad}]`
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length === 0) return '{}'
+  return `{\n${entries.map(([k, v]) => `${inner}${py(k)}: ${pyLiteral(v, level + 1)},`).join('\n')}\n${pad}}`
+}
+
 export function buildPythonSnippet(p: ChatSnippetParams): string {
   const messages = p.messages
     .map(({ role, content }) => `        {"role": ${py(role)}, "content": ${py(content)}},`)
@@ -80,6 +103,7 @@ export function buildPythonSnippet(p: ChatSnippetParams): string {
   if (p.temperature !== undefined) extra.push(`    temperature=${p.temperature},`)
   if (p.maxTokens !== undefined) extra.push(`    max_tokens=${p.maxTokens},`)
   if (p.stream) extra.push('    stream=True,')
+  if (p.responseFormat) extra.push(`    response_format=${pyLiteral(p.responseFormat, 1)},`)
   const output = p.stream
     ? [
         'for chunk in response:',
@@ -112,7 +136,7 @@ export function buildJavaScriptSnippet(p: ChatSnippetParams): string {
   const lines = [
     `  model: ${JSON.stringify(model)},`,
     `  messages: ${indent(JSON.stringify(messages, null, 2), 2)},`,
-    ...Object.entries(rest).map(([k, v]) => `  ${k}: ${JSON.stringify(v)},`),
+    ...Object.entries(rest).map(([k, v]) => `  ${k}: ${indent(JSON.stringify(v, null, typeof v === 'object' && v !== null ? 2 : undefined), 2)},`),
   ]
   const output = p.stream
     ? [
@@ -152,6 +176,7 @@ export function playgroundSnippetParams(
   const history: SnippetMessage[] = messages
     .filter((m) => m.content)
     .map(({ role, content }) => ({ role, content }))
+  const responseFormat = buildResponseFormat(params.responseFormat)
   const system: SnippetMessage[] = params.systemPrompt.trim() ? [{ role: 'system', content: params.systemPrompt.trim() }] : []
   return {
     baseUrl,
@@ -161,5 +186,6 @@ export function playgroundSnippetParams(
     temperature: params.temperature,
     maxTokens: params.maxTokens,
     stream: params.stream,
+    ...(responseFormat ? { responseFormat } : {}),
   }
 }

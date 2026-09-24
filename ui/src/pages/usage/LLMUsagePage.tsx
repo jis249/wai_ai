@@ -9,15 +9,19 @@ import { ErrorState } from '../../components/ui/ErrorState'
 import { Skeleton } from '../../components/ui/Skeleton'
 import { TimeRangePicker } from '../../components/ui/TimeRangePicker'
 import { Activity, ChartColumn, DollarSign, Sparkles } from '../../components/ui/icons'
-import { AreaChart, DonutChart, HorizontalBar } from '../../components/ui/charts'
+import { DonutChart, HorizontalBar, TimeSeriesChart } from '../../components/ui/charts'
+import { Toggle } from '../../components/ui/Toggle'
 import { ExportButtons } from '../../components/analytics/ExportButtons'
+import { buildCompareSeries } from '../../components/analytics/compareSeries'
+import { bucketRange, requestLogsUrl } from '../../components/analytics/drilldown'
+import { previousWindow } from '../../components/analytics/timeSeries'
 import { UsageScopeToggle } from '../../components/analytics/UsageScopeToggle'
 import { useMe } from '../../hooks/useMe'
 import { useUsage, useMyUsage, useCrossOrgUsage } from '../../hooks/useUsage'
 import type { UsageDataPoint } from '../../hooks/useUsage'
 import { formatNumber, formatTokens, formatCost } from '../../lib/utils'
 import { chartColor } from '../../lib/chartColors'
-import { useTimeRange, type TimeRangeValue } from '../../lib/timeRange'
+import { useTimeRange, type TimeGranularity, type TimeRangeValue } from '../../lib/timeRange'
 
 const BASE_GROUP_BY_OPTIONS = [
   { value: 'model', label: 'Model' },
@@ -127,13 +131,15 @@ export default function LLMUsagePage() {
   const [range, setRange] = useState<TimeRangeValue>('24h')
   const [groupBy, setGroupBy] = useState('model')
   const [crossOrg, setCrossOrg] = useState(false)
+  const [compare, setCompare] = useState(false)
 
   const { data: me } = useMe()
   const orgId = me?.org_id ?? ''
   const isSystemAdmin = me?.is_system_admin === true
   const canViewOrgUsage = isSystemAdmin || me?.role === 'org_admin'
 
-  const { from, to } = useTimeRange(range)
+  const { from, to, granularity } = useTimeRange(range)
+  const prev = useMemo(() => previousWindow(from, to), [from, to])
 
   const orgUsage = useUsage(orgId, from, to, groupBy, !!me && canViewOrgUsage)
   const myUsage = useMyUsage(from, to, groupBy, !!me && !canViewOrgUsage)
@@ -147,14 +153,37 @@ export default function LLMUsagePage() {
 
   const { data: usage, isLoading } = activeResult
 
-  // Daily trend data - only when groupBy is not already 'day'/'hour', and not cross-org
-  const needsDailyTrend = !crossOrg && groupBy !== 'day' && groupBy !== 'hour'
-  const orgDailyUsage = useUsage(orgId, from, to, 'day', !!me && canViewOrgUsage && needsDailyTrend)
-  const myDailyUsage = useMyUsage(from, to, 'day', !!me && !canViewOrgUsage && needsDailyTrend)
-  const dailyUsage = canViewOrgUsage ? orgDailyUsage : myDailyUsage
-  const trendQuery = needsDailyTrend ? dailyUsage : activeResult
-  // Use main data directly when groupBy is already day or hour
-  const trendData = needsDailyTrend ? dailyUsage.data?.data : usage?.data
+  // Trend buckets: the table's own day/hour grouping, else hourly for <=48h and daily beyond.
+  // Not shown cross-org.
+  const trendGroup: TimeGranularity = groupBy === 'day' || groupBy === 'hour' ? groupBy : granularity
+  const needsSeparateTrend = !crossOrg && groupBy !== trendGroup
+  const orgTrendUsage = useUsage(orgId, from, to, trendGroup, !!me && canViewOrgUsage && needsSeparateTrend)
+  const myTrendUsage = useMyUsage(from, to, trendGroup, !!me && !canViewOrgUsage && needsSeparateTrend)
+  const separateTrend = canViewOrgUsage ? orgTrendUsage : myTrendUsage
+  const trendQuery = needsSeparateTrend ? separateTrend : activeResult
+  // Use main data directly when groupBy is already the trend bucket
+  const trendData = needsSeparateTrend ? separateTrend.data?.data : usage?.data
+
+  // Previous window (same length, just before `from`) for the dashed comparison series.
+  const wantPrevious = compare && !crossOrg && !!me
+  const orgPrevUsage = useUsage(orgId, prev.from, prev.to, trendGroup, wantPrevious && canViewOrgUsage)
+  const myPrevUsage = useMyUsage(prev.from, prev.to, trendGroup, wantPrevious && !canViewOrgUsage)
+  const prevData = (canViewOrgUsage ? orgPrevUsage : myPrevUsage).data?.data
+
+  const trendPoints = useMemo(
+    () =>
+      buildCompareSeries({
+        from,
+        to,
+        granularity: trendGroup,
+        current: (trendData ?? []).map((d) => ({ key: d.group_key, value: d.total_requests })),
+        previous:
+          compare && prevData != null
+            ? prevData.map((d) => ({ key: d.group_key, value: d.total_requests }))
+            : null,
+      }),
+    [from, to, trendGroup, trendData, compare, prevData],
+  )
 
   // When switching away from cross-org, reset group_by if it was set to 'org'
   const handleCrossOrgToggle = (next: boolean) => {
@@ -255,7 +284,20 @@ export default function LLMUsagePage() {
           {/* Usage over Time chart - not shown in cross-org mode */}
           {!crossOrg && (
             <Card className="mb-6">
-              <CardHeader title="Usage over Time" />
+              <CardHeader
+                title="Usage over Time"
+                description={`Requests per ${trendGroup}. Select a point to open its requests.`}
+                className="flex-wrap"
+                actions={
+                  <Toggle
+                    checked={compare}
+                    onChange={setCompare}
+                    size="sm"
+                    label="Compare to previous period"
+                    aria-label="Compare to previous period"
+                  />
+                }
+              />
               {trendQuery.isError && trendData == null ? (
                 <ErrorState
                   title="Couldn't load usage trend"
@@ -265,16 +307,21 @@ export default function LLMUsagePage() {
                 />
               ) : trendQuery.isLoading ? (
                 <Skeleton className="h-[220px] w-full rounded-lg" />
-              ) : (trendData ?? []).length === 0 ? (
+              ) : (trendData ?? []).length === 0 && !(compare && (prevData ?? []).length > 0) ? (
                 noData
               ) : (
-                <AreaChart
-                  data={(trendData ?? []).map((d) => ({
-                    label: d.group_key.length > 10 ? d.group_key.slice(5) : d.group_key,
-                    value: d.total_requests,
-                  }))}
+                <TimeSeriesChart
+                  ariaLabel={`Requests per ${trendGroup}`}
+                  data={trendPoints}
                   height={220}
                   formatValue={formatNumber}
+                  seriesLabel="This period"
+                  previousLabel="Previous period"
+                  showPrevious={compare}
+                  getPointHref={(_, i) =>
+                    requestLogsUrl({ range: bucketRange(trendPoints[i].bucket, trendGroup) ?? range })
+                  }
+                  pointActionLabel="view requests in request logs"
                 />
               )}
             </Card>
