@@ -1,40 +1,18 @@
 import type { ReactNode } from 'react'
 import { PageHeader } from '../components/ui/PageHeader'
 import { StatCard } from '../components/ui/StatCard'
+import { Card, CardHeader } from '../components/ui/Card'
+import { EmptyState } from '../components/ui/EmptyState'
+import { ErrorState } from '../components/ui/ErrorState'
+import { SkeletonText } from '../components/ui/Skeleton'
+import { Clock, Cpu, HardDrive, Lock, MemoryStick } from '../components/ui/icons'
+import { StatCardSkeletons } from '../components/analytics/StatCardSkeletons'
 import { useQuery } from '@tanstack/react-query'
 import apiClient from '../api/client'
-import { useMe } from '../hooks/useMe'
+import { usePermissions } from '../hooks/usePermissions'
 import { useSystemUsage } from '../hooks/useSystemUsage'
 import type { SystemStorageInfo } from '../hooks/useSystemUsage'
 import { formatBytes, formatNumber, formatDate } from '../lib/utils'
-
-function IconCpu() {
-  return (
-    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
-      <rect x="6" y="6" width="12" height="12" rx="2" />
-      <path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3" />
-    </svg>
-  )
-}
-
-function IconStorage() {
-  return (
-    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
-      <ellipse cx="12" cy="5" rx="8" ry="3" />
-      <path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
-      <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
-    </svg>
-  )
-}
-
-function IconMemory() {
-  return (
-    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
-      <rect x="5" y="7" width="14" height="10" rx="2" />
-      <path d="M8 3v4M12 3v4M16 3v4M8 17v4M12 17v4M16 17v4M2 10h3M2 14h3M19 10h3M19 14h3" />
-    </svg>
-  )
-}
 
 function formatDuration(seconds: number): string {
   const days = Math.floor(seconds / 86400)
@@ -50,10 +28,17 @@ function percent(value: number | undefined): string {
   return `${Math.round(value)}%`
 }
 
-function Meter({ value }: { value: number }) {
+function Meter({ value, label }: { value: number; label: string }) {
   const safeValue = Math.max(0, Math.min(100, value || 0))
   return (
-    <div className="h-2 rounded-full bg-bg-tertiary overflow-hidden">
+    <div
+      className="h-2 rounded-full bg-bg-tertiary overflow-hidden"
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(safeValue)}
+    >
       <div className="h-full rounded-full bg-accent" style={{ width: `${safeValue}%` }} />
     </div>
   )
@@ -61,19 +46,32 @@ function Meter({ value }: { value: number }) {
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="rounded-xl border border-border bg-bg-secondary p-6">
-      <h2 className="mb-4 text-lg font-semibold text-text-primary">{title}</h2>
+    <Card as="section" className="min-w-0 p-4 sm:p-6">
+      <CardHeader title={title} className="mb-4" />
       {children}
-    </section>
+    </Card>
+  )
+}
+
+interface SubQuery {
+  isError: boolean
+  error: unknown
+  isFetching: boolean
+  refetch: () => unknown
+}
+
+function SubQueryError({ query, title }: { query: SubQuery; title: string }) {
+  return (
+    <ErrorState title={title} error={query.error} onRetry={() => void query.refetch()} retrying={query.isFetching} className="py-6" />
   )
 }
 
 function StorageRow({ disk }: { disk: SystemStorageInfo }) {
   return (
     <div className="rounded-lg border border-border bg-bg-primary p-4">
-      <div className="mb-3 flex items-center justify-between gap-4">
-        <div>
-          <div className="font-mono text-sm text-text-primary">{disk.name}</div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <div className="min-w-0">
+          <div className="font-mono text-sm text-text-primary break-all">{disk.name}</div>
           <div className="text-xs text-text-tertiary">
             {[disk.volume_name, disk.file_system].filter(Boolean).join(' · ') || 'Local disk'}
           </div>
@@ -82,7 +80,7 @@ function StorageRow({ disk }: { disk: SystemStorageInfo }) {
           {formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)}
         </div>
       </div>
-      <Meter value={disk.used_percent} />
+      <Meter value={disk.used_percent} label={`${disk.name} storage used`} />
       <div className="mt-2 flex justify-between text-xs text-text-tertiary">
         <span>{percent(disk.used_percent)} used</span>
         <span>{formatBytes(disk.free_bytes)} free</span>
@@ -92,12 +90,13 @@ function StorageRow({ disk }: { disk: SystemStorageInfo }) {
 }
 
 export default function SystemUsagePage({ hideHeader = false }: { hideHeader?: boolean }) {
-  const { data: me } = useMe()
-  const { data, isLoading, error } = useSystemUsage(me?.is_system_admin === true)
+  const { isSystemAdmin, isReady } = usePermissions()
+  const usageQuery = useSystemUsage(isSystemAdmin)
+  const { data, isLoading, error } = usageQuery
   const ollama = useQuery({
     queryKey: ['system-ollama'],
     queryFn: () => apiClient<{ ok: boolean; base_url: string; models: string[]; loaded: string[]; error?: string }>('/system/ollama'),
-    enabled: me?.is_system_admin === true,
+    enabled: isSystemAdmin,
     refetchInterval: 20_000,
   })
   const ops = useQuery({
@@ -110,17 +109,20 @@ export default function SystemUsagePage({ hideHeader = false }: { hideHeader?: b
         config_path: string
         database_dsn_redacted: string
       }>('/system/ops'),
-    enabled: me?.is_system_admin === true,
+    enabled: isSystemAdmin,
     refetchInterval: 30_000,
   })
 
-  if (me && !me.is_system_admin) {
+  if (isReady && !isSystemAdmin) {
     return (
       <>
         {!hideHeader && <PageHeader title="System Usage" description="Host resource usage and runtime configuration" />}
-        <div className="rounded-lg border border-border bg-bg-secondary p-12 text-center">
-          <p className="text-sm text-text-tertiary">You need system admin permissions to view system usage.</p>
-        </div>
+        <EmptyState
+          variant="card"
+          icon={<Lock className="w-6 h-6" />}
+          title="System admins only"
+          description="You need system admin permissions to view system usage."
+        />
       </>
     )
   }
@@ -139,46 +141,57 @@ export default function SystemUsagePage({ hideHeader = false }: { hideHeader?: b
       />
       )}
 
-      {error instanceof Error && (
-        <div className="mb-6 rounded-lg border border-error/30 bg-error/10 p-4 text-sm text-error">
-          {error.message}
-        </div>
+      {error != null && (
+        <ErrorState
+          variant="card"
+          className="mb-6"
+          title={data == null ? "Couldn't load system usage" : 'Showing last known values — refresh failed'}
+          error={error}
+          onRetry={() => void usageQuery.refetch()}
+          retrying={usageQuery.isFetching}
+        />
       )}
 
       <div className="space-y-6">
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            label="CPU Threads"
-            value={isLoading ? '...' : formatNumber(data?.runtime.num_cpu ?? 0)}
-            icon={<IconCpu />}
-            iconColor="purple"
-          />
-          <StatCard
-            label="Memory Used"
-            value={isLoading ? '...' : percent(memoryUsed)}
-            icon={<IconMemory />}
-            iconColor="blue"
-          />
-          <StatCard
-            label="Storage Used"
-            value={isLoading ? '...' : percent(storagePercent)}
-            icon={<IconStorage />}
-            iconColor="green"
-          />
-          <StatCard
-            label="Backend Uptime"
-            value={isLoading ? '...' : formatDuration(data?.runtime.uptime_seconds ?? 0)}
-            icon={<IconCpu />}
-            iconColor="pink"
-          />
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          {isLoading ? (
+            <StatCardSkeletons count={4} />
+          ) : (
+            <>
+              <StatCard
+                label="CPU Threads"
+                value={formatNumber(data?.runtime.num_cpu ?? 0)}
+                icon={<Cpu className="w-4 h-4" />}
+                iconColor="purple"
+              />
+              <StatCard
+                label="Memory Used"
+                value={percent(memoryUsed)}
+                icon={<MemoryStick className="w-4 h-4" />}
+                iconColor="blue"
+              />
+              <StatCard
+                label="Storage Used"
+                value={percent(storagePercent)}
+                icon={<HardDrive className="w-4 h-4" />}
+                iconColor="green"
+              />
+              <StatCard
+                label="Backend Uptime"
+                value={formatDuration(data?.runtime.uptime_seconds ?? 0)}
+                icon={<Clock className="w-4 h-4" />}
+                iconColor="pink"
+              />
+            </>
+          )}
         </div>
 
         <Section title="System">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Info label="OS" value={data?.os.name || data?.os.goos || 'Unknown'} />
             <Info label="Version" value={data?.os.version || 'Unknown'} />
             <Info label="Architecture" value={data?.os.architecture || data?.os.goarch || 'Unknown'} />
-            <Info label="Collected" value={data?.collected_at ? formatDate(data.collected_at) : '...'} />
+            <Info label="Collected" value={data?.collected_at ? formatDate(data.collected_at) : '—'} />
           </div>
         </Section>
 
@@ -204,7 +217,7 @@ export default function SystemUsagePage({ hideHeader = false }: { hideHeader?: b
                   {formatBytes(data?.memory.used_bytes ?? 0)} / {formatBytes(data?.memory.total_bytes ?? 0)}
                 </span>
               </div>
-              <Meter value={memoryUsed} />
+              <Meter value={memoryUsed} label="Memory used" />
               <div className="text-xs text-text-tertiary">
                 {formatBytes(data?.memory.available_bytes ?? 0)} available
               </div>
@@ -240,8 +253,10 @@ export default function SystemUsagePage({ hideHeader = false }: { hideHeader?: b
               <Info label="Installed models" value={ollama.data.models.join(', ') || 'none'} />
               <Info label="Loaded now" value={ollama.data.loaded.join(', ') || 'none'} />
             </div>
+          ) : ollama.isError ? (
+            <SubQueryError query={ollama} title="Couldn't check Ollama" />
           ) : (
-            <p className="text-sm text-text-tertiary">Checking Ollama…</p>
+            <SkeletonText lines={3} />
           )}
         </Section>
 
@@ -258,14 +273,16 @@ export default function SystemUsagePage({ hideHeader = false }: { hideHeader?: b
                 </pre>
               )}
             </div>
+          ) : ops.isError ? (
+            <SubQueryError query={ops} title="Couldn't load ops status" />
           ) : (
-            <p className="text-sm text-text-tertiary">Loading ops status…</p>
+            <SkeletonText lines={3} />
           )}
         </Section>
 
         <Section title="Configuration">
           {Object.keys(data?.configuration ?? {}).length > 0 ? (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {Object.entries(data?.configuration ?? {}).map(([key, value]) => (
                 <Info key={key} label={key} value={value} monospace />
               ))}
@@ -281,9 +298,9 @@ export default function SystemUsagePage({ hideHeader = false }: { hideHeader?: b
 
 function Info({ label, value, monospace = false }: { label: string; value: string; monospace?: boolean }) {
   return (
-    <div className="rounded-lg border border-border bg-bg-primary p-4">
-      <div className="text-xs uppercase tracking-wide text-text-tertiary">{label}</div>
-      <div className={monospace ? 'mt-1 font-mono text-sm text-text-primary' : 'mt-1 text-sm text-text-primary'}>
+    <div className="min-w-0 rounded-lg border border-border bg-bg-primary p-4">
+      <div className="text-xs uppercase tracking-wide text-text-tertiary break-all">{label}</div>
+      <div className={monospace ? 'mt-1 font-mono text-sm text-text-primary break-all' : 'mt-1 text-sm text-text-primary break-words'}>
         {value}
       </div>
     </div>

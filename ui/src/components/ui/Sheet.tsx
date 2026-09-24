@@ -1,6 +1,7 @@
 import React, { useId } from 'react'
 import ReactDOM from 'react-dom'
 import { cn } from '../../lib/utils'
+import { X } from './icons'
 import { useModalBehavior } from './useModalBehavior'
 
 export interface SheetProps {
@@ -98,16 +99,14 @@ export function Sheet({
               className="text-text-tertiary hover:text-text-primary transition-colors cursor-pointer"
               aria-label="Close"
             >
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <X className="h-5 w-5" aria-hidden="true" />
             </button>
           </div>
         </div>
 
         <div
           className={cn('flex-1 overflow-y-auto px-6 py-5', className)}
-          style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.15) transparent' }}
+          style={{ scrollbarWidth: 'thin', scrollbarColor: 'color-mix(in srgb, var(--color-text-tertiary) 40%, transparent) transparent' }}
         >
           {children}
         </div>

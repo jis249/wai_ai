@@ -17,14 +17,14 @@ export function PageHeader({ title, description, actions, documentTitle }: PageH
   // Anchored to the heading so a page header nested inside a layout header wins
   useDocumentTitle(documentTitle === false ? null : (documentTitle ?? title), headingRef)
   return (
-    <div className="mb-6 flex items-start justify-between">
-      <div>
-        <h1 ref={headingRef} className="text-2xl font-bold text-text-primary">{title}</h1>
+    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="min-w-0">
+        <h1 ref={headingRef} className="text-2xl font-bold text-text-primary break-words">{title}</h1>
         {description && (
           <p className="mt-1 text-sm text-text-secondary">{description}</p>
         )}
       </div>
-      {actions && <div className="flex items-center gap-3">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-3 sm:justify-end">{actions}</div>}
     </div>
   )
 }

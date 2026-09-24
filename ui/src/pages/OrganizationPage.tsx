@@ -1,13 +1,11 @@
 import { Outlet } from 'react-router-dom'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Tabs } from '../components/ui/Tabs'
-import { useMe } from '../hooks/useMe'
+import { usePermissions } from '../hooks/usePermissions'
 import type { Tab } from '../components/ui/Tabs'
 
 export default function OrganizationPage() {
-  const { data: me } = useMe()
-
-  const isOrgAdmin = me?.role === 'org_admin' || me?.role === 'system_admin'
+  const { isOrgAdmin } = usePermissions()
 
   const tabs: Tab[] = [
     ...(isOrgAdmin ? [{ label: 'Members', path: '/org/users' }] : []),

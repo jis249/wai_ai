@@ -3,60 +3,26 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { Input } from '../components/ui/Input'
 import { Button } from '../components/ui/Button'
 import { Badge } from '../components/ui/Badge'
+import { Banner } from '../components/ui/Banner'
+import { Card, CardHeader } from '../components/ui/Card'
+import { ErrorState } from '../components/ui/ErrorState'
+import { SkeletonCard } from '../components/ui/Skeleton'
+import { ThemeToggle } from '../components/ui/ThemeToggle'
+import { KeyRound, Sun, User } from '../components/ui/icons'
+import { PasswordInput } from '../components/settings/PasswordInput'
+import { RoleBadge } from '../components/members/RoleBadge'
 import { useMe } from '../hooks/useMe'
 import { useUpdateProfile } from '../hooks/useProfile'
 import { useToast } from '../hooks/useToast'
-import { ThemeToggle } from '../components/ui/ThemeToggle'
+import { errorMessage } from '../lib/errors'
 
-function formatRole(role?: string): string {
-  if (!role) return ''
-  return role.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
-}
-
-// ---------------------------------------------------------------------------
-// ConfigLabel — consistent section label style
-// ---------------------------------------------------------------------------
-
-function ConfigLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="text-xs font-semibold text-text-tertiary uppercase tracking-wider mb-1">
-      {children}
-    </p>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// SectionCard — consistent card wrapper
-// ---------------------------------------------------------------------------
-
-interface SectionCardProps {
-  title: string
-  children: React.ReactNode
-}
-
-function SectionCard({ title, children }: SectionCardProps) {
-  return (
-    <div className="rounded-lg border border-border bg-bg-secondary">
-      <div className="px-6 py-4 border-b border-border">
-        <h2 className="text-sm font-semibold text-text-primary">{title}</h2>
-      </div>
-      <div className="p-6">
-        {children}
-      </div>
-    </div>
-  )
-}
+const MIN_PASSWORD_LENGTH = 8
 
 // ---------------------------------------------------------------------------
 // EditProfileSection
 // ---------------------------------------------------------------------------
 
-interface EditProfileSectionProps {
-  userId: string
-  initialDisplayName: string
-}
-
-function EditProfileSection({ userId, initialDisplayName }: EditProfileSectionProps) {
+function EditProfileSection({ userId, initialDisplayName }: { userId: string; initialDisplayName: string }) {
   const [displayName, setDisplayName] = useState(initialDisplayName)
   const [displayNameError, setDisplayNameError] = useState<string | undefined>()
   const updateProfile = useUpdateProfile()
@@ -75,44 +41,32 @@ function EditProfileSection({ userId, initialDisplayName }: EditProfileSectionPr
     updateProfile.mutate(
       { userId, params: { display_name: trimmed } },
       {
-        onSuccess: () => {
-          toast({ variant: 'success', message: 'Profile updated' })
-        },
-        onError: (err) => {
-          toast({
-            variant: 'error',
-            message: err instanceof Error ? err.message : 'Failed to update profile',
-          })
-        },
+        onSuccess: () => toast({ variant: 'success', message: 'Profile updated' }),
+        onError: (err) => toast({ variant: 'error', message: errorMessage(err, 'Failed to update profile') }),
       },
     )
   }
 
   return (
-    <SectionCard title="Profile Information">
-      <form onSubmit={handleSubmit} noValidate className="space-y-4">
-        <Input
-          label="Display Name"
-          value={displayName}
-          onChange={(e) => {
-            setDisplayName(e.target.value)
-            if (displayNameError) setDisplayNameError(undefined)
-          }}
-          placeholder="e.g. Jane Smith"
-          error={displayNameError}
-          disabled={updateProfile.isPending}
-        />
-        <div className="flex justify-end">
-          <Button
-            type="submit"
-            loading={updateProfile.isPending}
-            disabled={!isDirty}
-          >
-            Save
-          </Button>
-        </div>
-      </form>
-    </SectionCard>
+    <form onSubmit={handleSubmit} noValidate className="space-y-4">
+      <Input
+        label="Display name"
+        value={displayName}
+        onChange={(e) => {
+          setDisplayName(e.target.value)
+          if (displayNameError) setDisplayNameError(undefined)
+        }}
+        placeholder="e.g. Jane Smith"
+        error={displayNameError}
+        disabled={updateProfile.isPending}
+        autoComplete="name"
+      />
+      <div className="flex justify-end">
+        <Button type="submit" loading={updateProfile.isPending} disabled={!isDirty}>
+          Save
+        </Button>
+      </div>
+    </form>
   )
 }
 
@@ -120,62 +74,47 @@ function EditProfileSection({ userId, initialDisplayName }: EditProfileSectionPr
 // ChangePasswordSection
 // ---------------------------------------------------------------------------
 
-interface ChangePasswordSectionProps {
-  userId: string
+interface PasswordErrors {
+  current?: string
+  next?: string
+  confirm?: string
 }
 
-function ChangePasswordSection({ userId }: ChangePasswordSectionProps) {
+function validatePasswords(current: string, next: string, confirm: string): PasswordErrors {
+  const errors: PasswordErrors = {}
+  if (!current) errors.current = 'Current password is required'
+  if (!next) errors.next = 'New password is required'
+  else if (next.length < MIN_PASSWORD_LENGTH) errors.next = `Password must be at least ${MIN_PASSWORD_LENGTH} characters`
+  else if (next === current) errors.next = 'New password must be different from the current one'
+  if (!confirm) errors.confirm = 'Confirm your new password'
+  else if (next !== confirm) errors.confirm = 'Passwords do not match'
+  return errors
+}
+
+function ChangePasswordSection({ userId, email }: { userId: string; email: string }) {
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [currentPasswordError, setCurrentPasswordError] = useState<string | undefined>()
-  const [newPasswordError, setNewPasswordError] = useState<string | undefined>()
-  const [confirmPasswordError, setConfirmPasswordError] = useState<string | undefined>()
+  const [errors, setErrors] = useState<PasswordErrors>({})
+  const [apiError, setApiError] = useState<string | null>(null)
 
   const updateProfile = useUpdateProfile()
   const { toast } = useToast()
 
+  function clear(field: keyof PasswordErrors) {
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: undefined }))
+    if (apiError) setApiError(null)
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    let hasError = false
-
-    if (!currentPassword) {
-      setCurrentPasswordError('Current password is required')
-      hasError = true
-    } else {
-      setCurrentPasswordError(undefined)
-    }
-
-    if (!newPassword) {
-      setNewPasswordError('New password is required')
-      hasError = true
-    } else if (newPassword.length < 8) {
-      setNewPasswordError('Password must be at least 8 characters')
-      hasError = true
-    } else {
-      setNewPasswordError(undefined)
-    }
-
-    if (!confirmPassword) {
-      setConfirmPasswordError('Please confirm your new password')
-      hasError = true
-    } else if (newPassword !== confirmPassword) {
-      setConfirmPasswordError('Passwords do not match')
-      hasError = true
-    } else {
-      setConfirmPasswordError(undefined)
-    }
-
-    if (hasError) return
+    const errs = validatePasswords(currentPassword, newPassword, confirmPassword)
+    setErrors(errs)
+    setApiError(null)
+    if (errs.current || errs.next || errs.confirm) return
 
     updateProfile.mutate(
-      {
-        userId,
-        params: {
-          current_password: currentPassword,
-          new_password: newPassword,
-        },
-      },
+      { userId, params: { current_password: currentPassword, new_password: newPassword } },
       {
         onSuccess: () => {
           toast({ variant: 'success', message: 'Password changed' })
@@ -184,65 +123,64 @@ function ChangePasswordSection({ userId }: ChangePasswordSectionProps) {
           setConfirmPassword('')
         },
         onError: (err) => {
-          toast({
-            variant: 'error',
-            message: err instanceof Error ? err.message : 'Failed to change password',
-          })
+          const message = errorMessage(err, 'Failed to change password')
+          // Backend: 400 invalid_current_password -> "current password is incorrect"
+          if (/current password/i.test(message)) setErrors({ current: 'Current password is incorrect' })
+          else setApiError(message)
         },
       },
     )
   }
 
+  const pending = updateProfile.isPending
+
   return (
-    <SectionCard title="Change Password">
-      <form onSubmit={handleSubmit} noValidate className="space-y-4">
-        <Input
-          label="Current Password"
-          type="password"
-          value={currentPassword}
-          onChange={(e) => {
-            setCurrentPassword(e.target.value)
-            if (currentPasswordError) setCurrentPasswordError(undefined)
-          }}
-          placeholder=""
-          error={currentPasswordError}
-          disabled={updateProfile.isPending}
-          autoComplete="current-password"
-        />
-        <Input
-          label="New Password"
-          type="password"
+    <form onSubmit={handleSubmit} noValidate className="space-y-4">
+      {/* Username field lets password managers associate the new password with the account. */}
+      <input type="text" name="username" autoComplete="username" value={email} readOnly hidden />
+      <PasswordInput
+        label="Current password"
+        value={currentPassword}
+        onChange={(e) => {
+          setCurrentPassword(e.target.value)
+          clear('current')
+        }}
+        error={errors.current}
+        disabled={pending}
+        autoComplete="current-password"
+      />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <PasswordInput
+          label="New password"
           value={newPassword}
           onChange={(e) => {
             setNewPassword(e.target.value)
-            if (newPasswordError) setNewPasswordError(undefined)
+            clear('next')
           }}
-          placeholder=""
-          error={newPasswordError}
-          disabled={updateProfile.isPending}
+          error={errors.next}
+          disabled={pending}
           autoComplete="new-password"
-          description="At least 8 characters"
+          description={`At least ${MIN_PASSWORD_LENGTH} characters`}
         />
-        <Input
-          label="Confirm New Password"
-          type="password"
+        <PasswordInput
+          label="Confirm new password"
           value={confirmPassword}
           onChange={(e) => {
             setConfirmPassword(e.target.value)
-            if (confirmPasswordError) setConfirmPasswordError(undefined)
+            clear('confirm')
           }}
-          placeholder=""
-          error={confirmPasswordError}
-          disabled={updateProfile.isPending}
+          error={errors.confirm}
+          disabled={pending}
           autoComplete="new-password"
         />
-        <div className="flex justify-end">
-          <Button type="submit" loading={updateProfile.isPending}>
-            Change Password
-          </Button>
-        </div>
-      </form>
-    </SectionCard>
+      </div>
+      {apiError !== null && <Banner variant="error" title={apiError} />}
+      <div className="flex justify-end">
+        <Button type="submit" loading={pending}>
+          Change password
+        </Button>
+      </div>
+    </form>
   )
 }
 
@@ -251,58 +189,58 @@ function ChangePasswordSection({ userId }: ChangePasswordSectionProps) {
 // ---------------------------------------------------------------------------
 
 export default function ProfilePage() {
-  const { data: me, isLoading } = useMe()
-
-  if (isLoading || !me) {
-    return (
-      <>
-        <PageHeader title="Profile" description="Manage your account settings" />
-        <div className="max-w-2xl space-y-6">
-          <div className="rounded-lg border border-border bg-bg-secondary p-6 space-y-4 animate-pulse">
-            <div className="h-4 w-24 rounded bg-bg-tertiary" />
-            <div className="h-9 w-full rounded bg-bg-tertiary" />
-            <div className="h-9 w-full rounded bg-bg-tertiary" />
-          </div>
-        </div>
-      </>
-    )
-  }
+  const { data: me, isPending, isError, error, refetch, isFetching } = useMe()
 
   return (
     <>
       <PageHeader title="Profile" description="Manage your account settings" />
-
       <div className="max-w-2xl space-y-6">
-        {/* Account Info */}
-        <SectionCard title="Account">
-          <div className="space-y-4">
-            <div>
-              <ConfigLabel>Email</ConfigLabel>
-              <span className="text-sm text-text-primary">{me.email}</span>
-            </div>
-            <div>
-              <ConfigLabel>Role</ConfigLabel>
-              <Badge variant="default">{formatRole(me.role)}</Badge>
-            </div>
-            {me.is_system_admin && (
-              <div>
-                <ConfigLabel>System Access</ConfigLabel>
-                <Badge variant="info">System Admin</Badge>
-              </div>
-            )}
-          </div>
-        </SectionCard>
+        {isPending ? (
+          <>
+            <SkeletonCard bodyClassName="h-20" />
+            <SkeletonCard bodyClassName="h-32" />
+          </>
+        ) : isError || !me ? (
+          <ErrorState variant="card" title="Could not load your profile" error={error} onRetry={() => void refetch()} retrying={isFetching} />
+        ) : (
+          <>
+            <Card>
+              <CardHeader title="Account" description="Your sign-in identity and access level." icon={<User className="h-5 w-5" />} />
+              <dl className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="min-w-0">
+                  <dt className="text-xs font-medium text-text-tertiary">Email</dt>
+                  <dd className="mt-1 break-all text-sm text-text-primary">{me.email}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium text-text-tertiary">Role</dt>
+                  <dd className="mt-1 flex flex-wrap gap-1.5">
+                    <RoleBadge role={me.role} />
+                    {me.is_system_admin && me.role !== 'system_admin' && <Badge variant="info">System Admin</Badge>}
+                  </dd>
+                </div>
+              </dl>
+              <EditProfileSection userId={me.id} initialDisplayName={me.display_name} />
+            </Card>
 
-        <EditProfileSection userId={me.id} initialDisplayName={me.display_name} />
+            <Card>
+              <CardHeader
+                title="Password"
+                description="Enter your current password to set a new one. SSO accounts manage passwords with their identity provider."
+                icon={<KeyRound className="h-5 w-5" />}
+              />
+              <ChangePasswordSection userId={me.id} email={me.email} />
+            </Card>
 
-        <SectionCard title="Appearance">
-          <p className="text-sm text-text-secondary mb-4">
-            Choose light or dark mode. Your preference is saved on this device.
-          </p>
-          <ThemeToggle />
-        </SectionCard>
-
-        <ChangePasswordSection userId={me.id} />
+            <Card>
+              <CardHeader
+                title="Appearance"
+                description="Choose light or dark mode. Your preference is saved on this device."
+                icon={<Sun className="h-5 w-5" />}
+              />
+              <ThemeToggle />
+            </Card>
+          </>
+        )}
       </div>
     </>
   )

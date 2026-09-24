@@ -1,6 +1,7 @@
 import React from 'react'
 import { cn } from '../../lib/utils'
 import { Button } from './Button'
+import { TriangleAlert } from './icons'
 import { errorMessage } from '../../lib/errors'
 
 export interface ErrorStateProps {
@@ -41,9 +42,7 @@ export function ErrorState({
         className="flex h-12 w-12 items-center justify-center rounded-full bg-error/10 text-error"
         aria-hidden="true"
       >
-        <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.75}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-        </svg>
+        <TriangleAlert className="h-6 w-6" aria-hidden="true" />
       </span>
       <div className="max-w-md">
         <h3 className="text-sm font-medium text-text-primary">{title}</h3>

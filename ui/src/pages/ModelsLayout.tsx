@@ -1,12 +1,10 @@
 import { Outlet } from 'react-router-dom'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Tabs } from '../components/ui/Tabs'
-import { useMe } from '../hooks/useMe'
+import { usePermissions } from '../hooks/usePermissions'
 
 export default function ModelsLayout() {
-  const { data: me } = useMe()
-  const isOrgAdmin = me?.role === 'org_admin' || me?.role === 'system_admin'
-  const isTeamAdmin = isOrgAdmin || me?.role === 'team_admin'
+  const { isOrgAdmin, isTeamAdmin } = usePermissions()
 
   const tabs = [
     { label: 'Catalog', path: '/models', end: true },

@@ -1,419 +1,52 @@
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Table } from '../components/ui/Table'
-import type { Column } from '../components/ui/Table'
-import { Dialog, ConfirmDialog } from '../components/ui/Dialog'
+import type { Column, SortState } from '../components/ui/Table'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
-import { Select } from '../components/ui/Select'
 import { TimeAgo } from '../components/ui/TimeAgo'
 import { StatCard } from '../components/ui/StatCard'
+import { IconButton } from '../components/ui/IconButton'
+import { EmptyState } from '../components/ui/EmptyState'
+import { ErrorState } from '../components/ui/ErrorState'
+import { Bot, Building2, Info, Pencil, Plus, Search, Trash2, Users } from '../components/ui/icons'
 import { useMe } from '../hooks/useMe'
-import {
-  useServiceAccounts,
-  useCreateServiceAccount,
-  useDeleteServiceAccount,
-  useUpdateServiceAccount,
-} from '../hooks/useServiceAccounts'
-import type {
-  ServiceAccountResponse,
-  CreateServiceAccountParams,
-} from '../hooks/useServiceAccounts'
+import { useServiceAccounts, useDeleteServiceAccount } from '../hooks/useServiceAccounts'
+import type { ServiceAccountResponse } from '../hooks/useServiceAccounts'
 import { useTeams } from '../hooks/useTeams'
 import { useToast } from '../hooks/useToast'
-import { formatDate } from '../lib/utils'
-
-// ---------------------------------------------------------------------------
-// Icons
-// ---------------------------------------------------------------------------
-
-function IconBot() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3" y="11" width="18" height="10" rx="2" />
-      <circle cx="12" cy="5" r="2" />
-      <path d="M12 7v4" />
-      <line x1="8" y1="16" x2="8" y2="16" strokeWidth="2.5" />
-      <line x1="12" y1="16" x2="12" y2="16" strokeWidth="2.5" />
-      <line x1="16" y1="16" x2="16" y2="16" strokeWidth="2.5" />
-    </svg>
-  )
-}
-
-function IconBuilding() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="2" y="3" width="20" height="18" rx="2" />
-      <path d="M9 21V7" />
-      <path d="M15 21V7" />
-      <path d="M2 12h20" />
-    </svg>
-  )
-}
-
-function IconGroup() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-      <circle cx="9" cy="7" r="4" />
-      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-    </svg>
-  )
-}
-
-function IconPencil() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-    </svg>
-  )
-}
-
-function IconTrash() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6l-1 14H6L5 6" />
-      <path d="M10 11v6M14 11v6" />
-      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-    </svg>
-  )
-}
-
-function IconBotLarge() {
-  return (
-    <svg
-      width="40"
-      height="40"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.25"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3" y="11" width="18" height="10" rx="2" />
-      <circle cx="12" cy="5" r="2" />
-      <path d="M12 7v4" />
-      <line x1="8" y1="16" x2="8" y2="16" strokeWidth="2.5" />
-      <line x1="12" y1="16" x2="12" y2="16" strokeWidth="2.5" />
-      <line x1="16" y1="16" x2="16" y2="16" strokeWidth="2.5" />
-    </svg>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// CreateServiceAccountDialog
-// ---------------------------------------------------------------------------
-
-interface CreateServiceAccountDialogProps {
-  open: boolean
-  onClose: () => void
-  orgId: string
-}
-
-function CreateServiceAccountDialog({ open, onClose, orgId }: CreateServiceAccountDialogProps) {
-  const [name, setName] = useState('')
-  const [nameError, setNameError] = useState<string | undefined>()
-  const [teamId, setTeamId] = useState('')
-  const [teamError, setTeamError] = useState<string | undefined>()
-
-  const { data: me } = useMe()
-  const isOrgAdmin = me?.role === 'org_admin' || me?.is_system_admin === true
-
-  const createServiceAccount = useCreateServiceAccount(orgId)
-  const { data: teams } = useTeams(orgId)
-  const { toast } = useToast()
-
-  // For non-admins with exactly one team, auto-select it without an effect.
-  const autoTeamId =
-    !isOrgAdmin && teams?.data?.length === 1 ? teams.data[0].id : ''
-  const effectiveTeamId = teamId || autoTeamId
-
-  const teamOptions = isOrgAdmin
-    ? [
-        { value: '', label: 'Org-scoped (no team)' },
-        ...(teams?.data?.map((t) => ({ value: t.id, label: t.name })) ?? []),
-      ]
-    : (teams?.data?.map((t) => ({ value: t.id, label: t.name })) ?? [])
-
-  function handleClose() {
-    setName('')
-    setNameError(undefined)
-    setTeamId('')
-    setTeamError(undefined)
-    onClose()
-  }
-
-  async function handleSubmit(e: React.FormEvent | React.MouseEvent) {
-    e.preventDefault()
-
-    const trimmedName = name.trim()
-    let hasError = false
-
-    if (!trimmedName) {
-      setNameError('Name is required')
-      hasError = true
-    } else {
-      setNameError(undefined)
-    }
-
-    if (!isOrgAdmin && !effectiveTeamId) {
-      setTeamError('Team is required')
-      hasError = true
-    } else {
-      setTeamError(undefined)
-    }
-
-    if (hasError) return
-
-    const params: CreateServiceAccountParams = {
-      name: trimmedName,
-      ...(effectiveTeamId ? { team_id: effectiveTeamId } : {}),
-    }
-
-    createServiceAccount.mutate(params, {
-      onSuccess: () => {
-        toast({ variant: 'success', message: 'Service account created' })
-        handleClose()
-      },
-      onError: (err) => {
-        toast({
-          variant: 'error',
-          message: err instanceof Error ? err.message : 'Failed to create service account',
-        })
-      },
-    })
-  }
-
-  return (
-    <Dialog open={open} onClose={handleClose} title="Create Service Account">
-      <form onSubmit={handleSubmit} className="space-y-5" noValidate>
-        <div className="space-y-1.5">
-          <p className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary">
-            Team
-          </p>
-          <Select
-            options={teamOptions}
-            value={effectiveTeamId}
-            onChange={(val) => {
-              setTeamId(val)
-              if (val) setTeamError(undefined)
-            }}
-            placeholder={isOrgAdmin ? 'Org-scoped (no team)' : 'Select a team...'}
-            error={teamError}
-            disabled={createServiceAccount.isPending}
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <p className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary">
-            Name
-          </p>
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. ci-deploy-bot"
-            error={nameError}
-            disabled={createServiceAccount.isPending}
-          />
-        </div>
-
-        {!isOrgAdmin && teamOptions.length === 0 && (
-          <p className="text-xs text-text-tertiary">
-            You are not a member of any team. Contact your org admin to be added to a team first.
-          </p>
-        )}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <Button
-            variant="secondary"
-            onClick={handleClose}
-            disabled={createServiceAccount.isPending}
-          >
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} loading={createServiceAccount.isPending}>
-            Create Service Account
-          </Button>
-        </div>
-      </form>
-    </Dialog>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// EditServiceAccountDialog
-// ---------------------------------------------------------------------------
-
-interface EditServiceAccountDialogProps {
-  open: boolean
-  onClose: () => void
-  sa: ServiceAccountResponse
-  orgId: string
-}
-
-function EditServiceAccountDialog({ open, onClose, sa, orgId }: EditServiceAccountDialogProps) {
-  const [name, setName] = useState(sa.name)
-  const [nameError, setNameError] = useState<string | undefined>()
-
-  const updateServiceAccount = useUpdateServiceAccount(orgId)
-  const { toast } = useToast()
-
-  const isDirty = name.trim() !== sa.name
-
-  function handleClose() {
-    setName(sa.name)
-    setNameError(undefined)
-    onClose()
-  }
-
-  function handleSubmit(e: React.FormEvent | React.MouseEvent) {
-    e.preventDefault()
-    const trimmed = name.trim()
-    if (!trimmed) {
-      setNameError('Name is required')
-      return
-    }
-    setNameError(undefined)
-
-    updateServiceAccount.mutate(
-      { saId: sa.id, name: trimmed },
-      {
-        onSuccess: () => {
-          toast({ variant: 'success', message: 'Service account updated' })
-          onClose()
-        },
-        onError: (err) => {
-          toast({
-            variant: 'error',
-            message: err instanceof Error ? err.message : 'Failed to update service account',
-          })
-        },
-      },
-    )
-  }
-
-  return (
-    <Dialog open={open} onClose={handleClose} title="Edit Service Account">
-      <form onSubmit={handleSubmit} className="space-y-5" noValidate>
-        <div className="space-y-1.5">
-          <p className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary">
-            Name
-          </p>
-          <Input
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value)
-              if (nameError) setNameError(undefined)
-            }}
-            error={nameError}
-            disabled={updateServiceAccount.isPending}
-          />
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div className="flex flex-col gap-1.5">
-            <p className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary">
-              Scope
-            </p>
-            <div>
-              {sa.team_id ? (
-                <Badge variant="info">Team</Badge>
-              ) : (
-                <Badge variant="default">Org</Badge>
-              )}
-            </div>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <p className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary">
-              Keys
-            </p>
-            <span className="text-sm text-text-primary">{sa.key_count}</span>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <p className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary">
-            Created
-          </p>
-          <span className="text-sm text-text-tertiary">{formatDate(sa.created_at)}</span>
-        </div>
-
-        <div className="flex justify-end gap-2 pt-1">
-          <Button
-            variant="secondary"
-            onClick={handleClose}
-            disabled={updateServiceAccount.isPending}
-          >
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} loading={updateServiceAccount.isPending} disabled={!isDirty}>
-            Save
-          </Button>
-        </div>
-      </form>
-    </Dialog>
-  )
-}
+import { errorMessage } from '../lib/errors'
+import { TypeToConfirmDialog } from './keys/TypeToConfirmDialog'
+import { CreateServiceAccountDialog, EditServiceAccountDialog } from './keys/ServiceAccountDialogs'
 
 // ---------------------------------------------------------------------------
 // ServiceAccountsPage
 // ---------------------------------------------------------------------------
+
+type SaSortColumn = 'name' | 'scope' | 'key_count' | 'created_at'
+
+function sortServiceAccounts(
+  rows: ServiceAccountResponse[],
+  sort: SortState | null,
+  teamNames: Map<string, string>,
+): ServiceAccountResponse[] {
+  if (!sort) return rows
+  const dir = sort.direction === 'asc' ? 1 : -1
+  const value = (sa: ServiceAccountResponse): string | number => {
+    switch (sort.column as SaSortColumn) {
+      case 'scope':
+        return sa.team_id ? `team ${(teamNames.get(sa.team_id) ?? '').toLowerCase()}` : 'org'
+      case 'key_count':
+        return sa.key_count
+      case 'created_at':
+        return Date.parse(sa.created_at) || 0
+      default:
+        return sa.name.toLowerCase()
+    }
+  }
+  return [...rows].sort((a, b) => (value(a) < value(b) ? -dir : value(a) > value(b) ? dir : 0))
+}
 
 export default function ServiceAccountsPage({ hideHeader = false }: { hideHeader?: boolean }) {
   const { data: me } = useMe()
@@ -422,31 +55,55 @@ export default function ServiceAccountsPage({ hideHeader = false }: { hideHeader
   const [cursor, setCursor] = useState<string | undefined>()
   const [prevCursors, setPrevCursors] = useState<string[]>([])
   const [showCreateDialog, setShowCreateDialog] = useState(false)
-  const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ServiceAccountResponse | null>(null)
   const [editSa, setEditSa] = useState<ServiceAccountResponse | null>(null)
+  const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<SortState | null>(null)
 
-  const { data: serviceAccounts, isLoading } = useServiceAccounts(orgId, cursor)
+  const { data: serviceAccounts, isLoading, isError, error, refetch, isFetching } = useServiceAccounts(orgId, cursor)
+  const { data: teams } = useTeams(orgId)
   const deleteServiceAccount = useDeleteServiceAccount(orgId)
   const { toast } = useToast()
 
-  const allSAs = serviceAccounts?.data ?? []
+  const allSAs = useMemo(() => serviceAccounts?.data ?? [], [serviceAccounts?.data])
+  const teamNames = useMemo(() => new Map((teams?.data ?? []).map((t) => [t.id, t.name])), [teams?.data])
   const orgScopedCount = allSAs.filter((sa) => !sa.team_id).length
-  const teamScopedCount = allSAs.filter((sa) => !!sa.team_id).length
+  const teamScopedCount = allSAs.length - orgScopedCount
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const filtered = q
+      ? allSAs.filter(
+          (sa) => sa.name.toLowerCase().includes(q) || (sa.team_id && teamNames.get(sa.team_id)?.toLowerCase().includes(q)),
+        )
+      : allSAs
+    return sortServiceAccounts(filtered, sort, teamNames)
+  }, [allSAs, query, sort, teamNames])
+
+  function handleSort(column: string) {
+    setSort((s) =>
+      s?.column === column
+        ? { column, direction: s.direction === 'asc' ? 'desc' : 'asc' }
+        : { column, direction: column === 'created_at' || column === 'key_count' ? 'desc' : 'asc' },
+    )
+  }
 
   const columns: Column<ServiceAccountResponse>[] = [
     {
       key: 'name',
       header: 'Name',
-      render: (row) => (
-        <span className="font-medium text-text-primary">{row.name}</span>
-      ),
+      sortable: true,
+      render: (row) => <span className="block max-w-[16rem] truncate font-medium text-text-primary">{row.name}</span>,
     },
     {
       key: 'scope',
       header: 'Scope',
+      sortable: true,
       render: (row) =>
         row.team_id ? (
-          <Badge variant="info">Team</Badge>
+          <Badge variant="info" className="max-w-[14rem] truncate">
+            Team{teamNames.get(row.team_id) ? `: ${teamNames.get(row.team_id)}` : ''}
+          </Badge>
         ) : (
           <Badge variant="default">Organization</Badge>
         ),
@@ -454,13 +111,13 @@ export default function ServiceAccountsPage({ hideHeader = false }: { hideHeader
     {
       key: 'key_count',
       header: 'Keys',
-      render: (row) => (
-        <span className="text-sm text-text-secondary">{row.key_count}</span>
-      ),
+      sortable: true,
+      render: (row) => <span className="text-sm text-text-secondary">{row.key_count}</span>,
     },
     {
       key: 'created_at',
       header: 'Created',
+      sortable: true,
       render: (row) => <TimeAgo date={row.created_at} />,
     },
     {
@@ -468,111 +125,104 @@ export default function ServiceAccountsPage({ hideHeader = false }: { hideHeader
       header: '',
       align: 'right',
       render: (row) => (
-        <div className="flex items-center justify-end gap-1">
-          <Button
-            variant="ghost"
+        <div className="flex items-center justify-end gap-0.5">
+          <IconButton
             size="sm"
+            icon={<Pencil />}
+            aria-label={`Edit ${row.name}`}
+            tooltip="Edit"
             onClick={() => setEditSa(row)}
             disabled={deleteServiceAccount.isPending}
-            className="!px-1.5"
-            title="Edit"
-          >
-            <IconPencil />
-          </Button>
-          <Button
-            variant="ghost"
+          />
+          <IconButton
             size="sm"
-            onClick={() => setDeleteId(row.id)}
-            className="!px-1.5 text-error hover:text-error"
+            variant="destructive"
+            icon={<Trash2 />}
+            aria-label={`Delete ${row.name}`}
+            tooltip="Delete"
+            onClick={() => setDeleteTarget(row)}
             disabled={deleteServiceAccount.isPending}
-            title="Delete"
-          >
-            <IconTrash />
-          </Button>
+          />
         </div>
       ),
     },
   ]
 
   function handleDelete() {
-    if (!deleteId) return
-    deleteServiceAccount.mutate(deleteId, {
+    if (!deleteTarget) return
+    const target = deleteTarget
+    deleteServiceAccount.mutate(target.id, {
       onSuccess: () => {
-        toast({ variant: 'success', message: 'Service account deleted' })
-        setDeleteId(null)
+        toast({ variant: 'success', message: `Service account "${target.name}" deleted` })
+        setDeleteTarget(null)
       },
       onError: (err) => {
-        toast({
-          variant: 'error',
-          message: err instanceof Error ? err.message : 'Failed to delete service account',
-        })
-        setDeleteId(null)
+        toast({ variant: 'error', message: errorMessage(err, 'Failed to delete service account') })
+        setDeleteTarget(null)
       },
     })
   }
 
-  const hasData = allSAs.length > 0
-  const showEmptyState = !isLoading && !hasData && !!orgId
+  const createButton = (
+    <Button icon={<Plus className="h-4 w-4" aria-hidden="true" />} onClick={() => setShowCreateDialog(true)}>
+      Create Service Account
+    </Button>
+  )
+  const helpText = (
+    <p className="flex min-w-0 items-start gap-2 text-sm text-text-secondary">
+      <Info className="mt-0.5 h-4 w-4 shrink-0 text-text-tertiary" aria-hidden="true" />
+      <span>Service account keys work for the /v1 API and MCP gateway only.</span>
+    </p>
+  )
 
-  return (
-    <>
-      {!hideHeader && (
-      <PageHeader
-        title="Service Accounts"
-        description="Manage service accounts for automation"
-        actions={
-          <Button onClick={() => setShowCreateDialog(true)}>Create Service Account</Button>
-        }
+  const showEmptyState = !isLoading && !isError && allSAs.length === 0 && !serviceAccounts?.has_more && !!orgId
+
+  let body: React.ReactNode
+  if (isError && !serviceAccounts) {
+    body = (
+      <ErrorState variant="card" title="Couldn't load service accounts" error={error} onRetry={() => void refetch()} retrying={isFetching} />
+    )
+  } else if (showEmptyState) {
+    body = (
+      <EmptyState
+        variant="card"
+        icon={<Bot className="h-6 w-6" />}
+        title="No service accounts yet"
+        description="Create a service account for CI/CD and automation."
+        action={{ label: 'Create Service Account', onClick: () => setShowCreateDialog(true) }}
       />
-      )}
-      {hideHeader && (
-        <div className="flex justify-end mb-4">
-          <Button onClick={() => setShowCreateDialog(true)}>Create Service Account</Button>
+    )
+  } else {
+    body = (
+      <>
+        <div className="relative mb-4 w-full sm:max-w-xs">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" aria-hidden="true" />
+          <Input
+            type="search"
+            aria-label="Search service accounts by name or team"
+            placeholder="Search name or team"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-9"
+          />
         </div>
-      )}
-
-      <div className="grid grid-cols-3 gap-4 mb-6">
-        <StatCard
-          label="Total Service Accounts"
-          value={allSAs.length}
-          icon={<IconBot />}
-          iconColor="purple"
-        />
-        <StatCard
-          label="Org-Scoped"
-          value={orgScopedCount}
-          icon={<IconBuilding />}
-          iconColor="blue"
-        />
-        <StatCard
-          label="Team-Scoped"
-          value={teamScopedCount}
-          icon={<IconGroup />}
-          iconColor="green"
-        />
-      </div>
-
-      {showEmptyState ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center">
-          <span className="text-text-tertiary mb-4">
-            <IconBotLarge />
-          </span>
-          <h3 className="text-base font-medium text-text-primary mb-1">
-            No service accounts yet
-          </h3>
-          <p className="text-sm text-text-tertiary mb-6">
-            Create a service account for CI/CD and automation
-          </p>
-          <Button onClick={() => setShowCreateDialog(true)}>
-            Create Service Account
-          </Button>
-        </div>
-      ) : (
         <Table<ServiceAccountResponse>
           columns={columns}
-          data={allSAs}
+          data={visible}
           keyExtractor={(row) => row.id}
           loading={isLoading && !!orgId}
+          sort={sort ?? undefined}
+          onSort={handleSort}
+          emptyState={
+            query.trim() ? (
+              <EmptyState
+                icon={<Search className="h-6 w-6" />}
+                title="No matching service accounts"
+                description="Try a different search."
+                action={{ label: 'Clear search', onClick: () => setQuery('') }}
+              />
+            ) : undefined
+          }
           emptyMessage="No service accounts found"
           pagination={{
             cursor: cursor ?? null,
@@ -591,32 +241,57 @@ export default function ServiceAccountsPage({ hideHeader = false }: { hideHeader
             },
           }}
         />
-      )}
+      </>
+    )
+  }
 
-      <CreateServiceAccountDialog
-        open={showCreateDialog}
-        onClose={() => setShowCreateDialog(false)}
-        orgId={orgId}
-      />
+  return (
+    <>
+      {!hideHeader && (
+        <PageHeader title="Service Accounts" description="Manage service accounts for automation" actions={createButton} />
+      )}
+      <div className="mb-4 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+        {helpText}
+        {hideHeader && <div className="shrink-0">{createButton}</div>}
+      </div>
+
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatCard label="Total Service Accounts" value={allSAs.length} icon={<Bot className="h-4 w-4" />} iconColor="purple" />
+        <StatCard label="Org-Scoped" value={orgScopedCount} icon={<Building2 className="h-4 w-4" />} iconColor="blue" />
+        <StatCard label="Team-Scoped" value={teamScopedCount} icon={<Users className="h-4 w-4" />} iconColor="green" />
+      </div>
+
+      {body}
+
+      <CreateServiceAccountDialog open={showCreateDialog} onClose={() => setShowCreateDialog(false)} orgId={orgId} />
 
       {editSa && (
         <EditServiceAccountDialog
-          open={editSa !== null}
+          key={editSa.id}
           onClose={() => setEditSa(null)}
           sa={editSa}
+          teamName={editSa.team_id ? teamNames.get(editSa.team_id) : undefined}
           orgId={orgId}
         />
       )}
 
-      <ConfirmDialog
-        open={deleteId !== null}
-        onClose={() => setDeleteId(null)}
-        onConfirm={handleDelete}
-        title="Delete Service Account"
-        description="Are you sure you want to delete this service account? Any keys associated with it will also be revoked."
-        confirmLabel="Delete"
-        loading={deleteServiceAccount.isPending}
-      />
+      {deleteTarget && (
+        <TypeToConfirmDialog
+          key={deleteTarget.id}
+          open
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={handleDelete}
+          title="Delete service account"
+          description={
+            deleteTarget.key_count > 0
+              ? `This also revokes its ${deleteTarget.key_count} key${deleteTarget.key_count === 1 ? '' : 's'}. This action cannot be undone.`
+              : 'This action cannot be undone.'
+          }
+          confirmText={deleteTarget.name}
+          confirmLabel="Delete"
+          loading={deleteServiceAccount.isPending}
+        />
+      )}
     </>
   )
 }

@@ -2,20 +2,20 @@ import { useParams, Outlet, Navigate } from 'react-router-dom'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Tabs } from '../components/ui/Tabs'
 import { useOrg } from '../hooks/useOrg'
-import { useMe } from '../hooks/useMe'
+import { usePermissions } from '../hooks/usePermissions'
 import type { Tab } from '../components/ui/Tabs'
 
 export default function OrgDetailPage() {
   const { orgId = '' } = useParams<{ orgId: string }>()
 
-  const { data: me } = useMe()
+  const { isReady, isSystemAdmin } = usePermissions()
   const { data: org } = useOrg(orgId)
 
   if (!orgId) {
     return <Navigate to="/orgs" replace />
   }
 
-  if (me && !me.is_system_admin) {
+  if (isReady && !isSystemAdmin) {
     return <Navigate to="/" replace />
   }
 

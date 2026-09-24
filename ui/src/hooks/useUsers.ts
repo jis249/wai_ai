@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import apiClient from '../api/client'
 
 // UserResponse is the wire shape returned by /users/:user_id.
@@ -33,6 +33,28 @@ export function useUser(userId: string) {
     enabled: !!userId,
     staleTime: 5 * 60 * 1000,
   })
+}
+
+/**
+ * Resolve several users at once (shares the `['user', id]` cache with `useUser`).
+ * Returns a map of id -> user for the ids that have loaded, plus a loading flag.
+ */
+export function useUsersByIds(userIds: readonly string[]) {
+  const results = useQueries({
+    queries: userIds.map((id) => ({
+      queryKey: ['user', id],
+      queryFn: () => apiClient<UserResponse>(`/users/${id}`),
+      enabled: !!id,
+      staleTime: 5 * 60 * 1000,
+    })),
+  })
+  const byId = new Map<string, UserResponse>()
+  let isLoading = false
+  results.forEach((r, i) => {
+    if (r.data) byId.set(userIds[i], r.data)
+    if (r.isPending && r.fetchStatus !== 'idle') isLoading = true
+  })
+  return { byId, isLoading }
 }
 
 export function useUsers(cursor?: string) {

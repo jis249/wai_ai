@@ -5,32 +5,22 @@ import { Table } from '../components/ui/Table'
 import type { Column } from '../components/ui/Table'
 import { Badge, type BadgeProps } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
+import { EmptyState } from '../components/ui/EmptyState'
+import { ErrorState } from '../components/ui/ErrorState'
 import { Input } from '../components/ui/Input'
 import { Select } from '../components/ui/Select'
 import { StatCard } from '../components/ui/StatCard'
 import { TimeAgo } from '../components/ui/TimeAgo'
+import { TimeRangePicker } from '../components/ui/TimeRangePicker'
+import { Tooltip } from '../components/ui/Tooltip'
+import { Activity, List, ScrollText, Search, User } from '../components/ui/icons'
+import { ExportButtons } from '../components/analytics/ExportButtons'
+import { StatCardSkeletons } from '../components/analytics/StatCardSkeletons'
 import { useMe } from '../hooks/useMe'
 import { useOrgs } from '../hooks/useOrgs'
 import { useAuditLog } from '../hooks/useAuditLog'
 import type { AuditEvent } from '../hooks/useAuditLog'
-import { exportData } from '../lib/export'
-
-const TIME_RANGES = ['24h', '7d', '30d', '90d'] as const
-type TimeRange = (typeof TIME_RANGES)[number]
-
-const RANGE_LABELS: Record<TimeRange, string> = {
-  '24h': 'Last 24h',
-  '7d': 'Last 7d',
-  '30d': 'Last 30d',
-  '90d': 'Last 90d',
-}
-
-const RANGE_HOURS: Record<TimeRange, number> = {
-  '24h': 24,
-  '7d': 168,
-  '30d': 720,
-  '90d': 2160,
-}
+import { timeRangeKey, timeRangeLabel, useTimeRange, type TimeRangeValue } from '../lib/timeRange'
 
 const RESOURCE_TYPE_OPTIONS = [
   { value: '', label: 'All Resources' },
@@ -73,12 +63,6 @@ const EXPORT_HEADERS = [
   { key: 'request_id', label: 'Request ID' },
 ]
 
-function getTimeRange(range: TimeRange): { from: string; to: string } {
-  const now = new Date()
-  const from = new Date(now.getTime() - RANGE_HOURS[range] * 3_600_000)
-  return { from: from.toISOString(), to: now.toISOString() }
-}
-
 type BadgeVariant = NonNullable<BadgeProps['variant']>
 
 const ACTION_BADGE: Record<string, BadgeVariant> = {
@@ -116,46 +100,6 @@ function emailFromDescription(description: string): string {
   return match?.[1] ?? ''
 }
 
-function IconList() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <line x1="8" y1="6" x2="21" y2="6" />
-      <line x1="8" y1="12" x2="21" y2="12" />
-      <line x1="8" y1="18" x2="21" y2="18" />
-      <line x1="3" y1="6" x2="3.01" y2="6" />
-      <line x1="3" y1="12" x2="3.01" y2="12" />
-      <line x1="3" y1="18" x2="3.01" y2="18" />
-    </svg>
-  )
-}
-
-function IconUser() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-      <circle cx="12" cy="7" r="4" />
-    </svg>
-  )
-}
-
-function IconActivity() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-    </svg>
-  )
-}
-
-function IconDownload() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <polyline points="7 10 12 15 17 10" />
-      <line x1="12" y1="15" x2="12" y2="3" />
-    </svg>
-  )
-}
-
 const columns: Column<AuditEvent>[] = [
   {
     key: 'timestamp',
@@ -171,11 +115,11 @@ const columns: Column<AuditEvent>[] = [
       if (label) {
         return (
           <div className="flex flex-col gap-0.5 min-w-0">
-            <span className="text-sm text-text-primary truncate" title={label}>
+            <span className="text-sm text-text-primary truncate">
               {row.actor_display_name || row.actor_email || fallbackEmail}
             </span>
             {(row.actor_email || fallbackEmail) && row.actor_display_name && (
-              <span className="text-xs text-text-tertiary truncate" title={row.actor_email || fallbackEmail}>
+              <span className="text-xs text-text-tertiary truncate">
                 {row.actor_email || fallbackEmail}
               </span>
             )}
@@ -186,10 +130,12 @@ const columns: Column<AuditEvent>[] = [
         )
       }
       return (
-        <span className="font-mono text-xs text-text-secondary" title={row.actor_id}>
-          <span className="text-text-tertiary mr-1">{row.actor_type || 'unknown'}</span>
-          {shortenId(row.actor_id)}
-        </span>
+        <Tooltip content={row.actor_id}>
+          <span className="font-mono text-xs text-text-secondary">
+            <span className="text-text-tertiary mr-1">{row.actor_type || 'unknown'}</span>
+            {shortenId(row.actor_id)}
+          </span>
+        </Tooltip>
       )
     },
   },
@@ -209,9 +155,9 @@ const columns: Column<AuditEvent>[] = [
       <div className="flex flex-col gap-0.5">
         <Badge variant="muted">{row.resource_type}</Badge>
         {row.resource_id && (
-          <span className="font-mono text-[11px] text-text-tertiary" title={row.resource_id}>
-            {shortenId(row.resource_id)}
-          </span>
+          <Tooltip content={row.resource_id}>
+            <span className="font-mono text-[11px] text-text-tertiary">{shortenId(row.resource_id)}</span>
+          </Tooltip>
         )}
       </div>
     ),
@@ -221,7 +167,7 @@ const columns: Column<AuditEvent>[] = [
     header: 'Details',
     render: (row) => (
       row.description
-        ? <code className="text-xs font-mono bg-bg-tertiary px-1.5 py-0.5 rounded text-text-secondary">{row.description}</code>
+        ? <code className="text-xs font-mono bg-bg-tertiary px-1.5 py-0.5 rounded text-text-secondary break-all">{row.description}</code>
         : <span className="text-text-tertiary">—</span>
     ),
   },
@@ -238,9 +184,11 @@ const columns: Column<AuditEvent>[] = [
     key: 'request_id',
     header: 'Request',
     render: (row) => (
-      <span className="font-mono text-[11px] text-text-tertiary" title={row.request_id}>
-        {row.request_id ? shortenId(row.request_id) : '—'}
-      </span>
+      <Tooltip content={row.request_id}>
+        <span className="font-mono text-[11px] text-text-tertiary">
+          {row.request_id ? shortenId(row.request_id) : '—'}
+        </span>
+      </Tooltip>
     ),
   },
   {
@@ -256,7 +204,7 @@ const columns: Column<AuditEvent>[] = [
 ]
 
 export default function AuditLogPage({ hideHeader = false }: { hideHeader?: boolean }) {
-  const [range, setRange] = useState<TimeRange>('7d')
+  const [range, setRange] = useState<TimeRangeValue>('7d')
   const [resourceType, setResourceType] = useState('')
   const [action, setAction] = useState('')
   const [actorId, setActorId] = useState('')
@@ -270,11 +218,12 @@ export default function AuditLogPage({ hideHeader = false }: { hideHeader?: bool
   const { data: orgsData } = useOrgs(undefined)
   const orgId = isSystemAdmin ? selectedOrgId : (me?.org_id ?? '')
 
-  const { from, to } = useMemo(() => getTimeRange(range), [range])
+  const { from, to, preset } = useTimeRange(range)
+  const rangeKey = timeRangeKey(range)
 
   const canQuery = !!me && (isSystemAdmin || !!orgId)
 
-  const { data, isLoading } = useAuditLog({
+  const auditQuery = useAuditLog({
     orgId,
     actorId: actorId.trim(),
     resourceType,
@@ -285,10 +234,11 @@ export default function AuditLogPage({ hideHeader = false }: { hideHeader?: bool
     cursor: currentCursor,
     enabled: canQuery,
   })
+  const { data, isLoading } = auditQuery
 
   useEffect(() => {
     setCursors([''])
-  }, [orgId, actorId, resourceType, action, range, pageSize])
+  }, [orgId, actorId, resourceType, action, rangeKey, pageSize])
 
   const events = data?.data ?? []
   const hasPrevious = cursors.length > 1
@@ -314,136 +264,133 @@ export default function AuditLogPage({ hideHeader = false }: { hideHeader?: bool
     setCursors((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))
   }
 
-  const isDataLoading = isLoading && canQuery
+  function clearFilters() {
+    setResourceType('')
+    setAction('')
+    setActorId('')
+    if (isSystemAdmin) setSelectedOrgId('')
+  }
 
-  const emptyMessage = activeFilterCount > 0
-    ? 'No audit events match the selected filters'
-    : `No audit events found for the ${RANGE_LABELS[range].toLowerCase()} time range`
+  const isDataLoading = isLoading && canQuery
+  const loadFailed = auditQuery.isError && data == null
+
+  const emptyState = activeFilterCount > 0 ? (
+    <EmptyState
+      icon={<Search className="w-6 h-6" />}
+      title="No matching events"
+      description="No audit events match the selected filters."
+      action={{ label: 'Clear filters', onClick: clearFilters }}
+      className="py-10"
+    />
+  ) : (
+    <EmptyState
+      icon={<ScrollText className="w-6 h-6" />}
+      title="No audit events"
+      description={
+        preset != null
+          ? `Nothing was recorded in the ${timeRangeLabel(range, 'long').toLowerCase()}.`
+          : 'Nothing was recorded in the selected range.'
+      }
+      className="py-10"
+    />
+  )
 
   return (
-    <>
+    <div className="min-w-0">
       {!hideHeader && (
-      <PageHeader
-        title="Audit Log"
-        description="Web app activity including user logins, admin changes, and API actions"
-      />
+        <PageHeader
+          title="Audit Log"
+          description="Web app activity including user logins, admin changes, and API actions"
+        />
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <StatCard
-          label="Events on Page"
-          value={isDataLoading ? '—' : events.length}
-          icon={<IconList />}
-          iconColor="purple"
-        />
-        <StatCard
-          label="Unique Actors"
-          value={isDataLoading ? '—' : uniqueActors}
-          icon={<IconUser />}
-          iconColor="blue"
-        />
+        {isDataLoading ? (
+          <StatCardSkeletons count={2} />
+        ) : (
+          <>
+            <StatCard label="Events on Page" value={events.length} icon={<List className="w-4 h-4" />} iconColor="purple" />
+            <StatCard label="Unique Actors" value={uniqueActors} icon={<User className="w-4 h-4" />} iconColor="blue" />
+          </>
+        )}
         <StatCard
           label="Active Filters"
           value={activeFilterCount}
-          icon={<IconActivity />}
+          icon={<Activity className="w-4 h-4" />}
           iconColor={activeFilterCount > 0 ? 'yellow' : 'purple'}
         />
       </div>
 
       <div className="flex flex-col gap-4 mb-6">
-        <div className="flex flex-col lg:flex-row lg:items-end gap-4">
-          <div className="flex items-center gap-1 p-1 rounded-lg bg-bg-tertiary w-fit">
-            {TIME_RANGES.map((r) => (
-              <button
-                key={r}
-                type="button"
-                onClick={() => setRange(r)}
-                className={[
-                  'px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
-                  range === r
-                    ? 'bg-bg-secondary text-text-primary shadow-sm'
-                    : 'text-text-tertiary hover:text-text-secondary',
-                ].join(' ')}
-              >
-                {RANGE_LABELS[r]}
-              </button>
-            ))}
-          </div>
+        <div className="flex flex-col xl:flex-row xl:items-end gap-4">
+          <TimeRangePicker value={range} onChange={setRange} />
 
-          <div className="flex flex-wrap items-end gap-3 lg:ml-auto">
+          <div
+            role="group"
+            aria-label="Audit log filters"
+            className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-wrap lg:items-start gap-3 xl:ml-auto"
+          >
             {isSystemAdmin && (
-              <div className="w-52">
-                <Select
-                  label="Organization"
-                  value={selectedOrgId}
-                  onChange={setSelectedOrgId}
-                  options={orgOptions}
-                  fullWidth
-                />
+              <div className="w-full lg:w-52">
+                <Select label="Organization" value={selectedOrgId} onChange={setSelectedOrgId} options={orgOptions} fullWidth />
               </div>
             )}
-            <div className="w-44">
-              <Select
-                label="Resource"
-                value={resourceType}
-                onChange={setResourceType}
-                options={RESOURCE_TYPE_OPTIONS}
-                fullWidth
-              />
+            <div className="w-full lg:w-44">
+              <Select label="Resource" value={resourceType} onChange={setResourceType} options={RESOURCE_TYPE_OPTIONS} fullWidth />
             </div>
-            <div className="w-40">
-              <Select
-                label="Action"
-                value={action}
-                onChange={setAction}
-                options={ACTION_OPTIONS}
-                fullWidth
-              />
+            <div className="w-full lg:w-40">
+              <Select label="Action" value={action} onChange={setAction} options={ACTION_OPTIONS} fullWidth />
             </div>
-            <div className="w-52">
+            <div className="w-full lg:w-64">
               <Input
                 label="Actor ID"
                 value={actorId}
                 onChange={(e) => setActorId(e.target.value)}
-                placeholder="Filter by actor UUID"
+                placeholder="e.g. 3f2a9c1e-…"
+                description="Exact user, key or service-account UUID (hover an actor in the table to see it)."
+                autoComplete="off"
+                spellCheck={false}
               />
             </div>
           </div>
         </div>
 
-        <div className="flex gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<IconDownload />}
-            onClick={() => exportData(events as unknown as Record<string, unknown>[], EXPORT_HEADERS, `wai-audit-log-${range}`, 'csv')}
-            disabled={events.length === 0}
-          >
-            CSV
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<IconDownload />}
-            onClick={() => exportData(events as unknown as Record<string, unknown>[], EXPORT_HEADERS, `wai-audit-log-${range}`, 'json')}
-            disabled={events.length === 0}
-          >
-            JSON
-          </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportButtons
+            data={events}
+            headers={EXPORT_HEADERS}
+            filenamePrefix={`wai-audit-log-${preset ?? 'custom'}`}
+            subject="audit events"
+          />
+          {activeFilterCount > 0 && (
+            <Button variant="ghost" size="sm" onClick={clearFilters}>
+              Clear filters
+            </Button>
+          )}
         </div>
       </div>
 
-      <Table<AuditEvent>
-        columns={columns}
-        data={events}
-        keyExtractor={(row) => row.id}
-        loading={isDataLoading}
-        emptyMessage={emptyMessage}
-      />
+      {loadFailed ? (
+        <ErrorState
+          variant="card"
+          title="Couldn't load audit events"
+          error={auditQuery.error}
+          onRetry={() => void auditQuery.refetch()}
+          retrying={auditQuery.isFetching}
+        />
+      ) : (
+        <Table<AuditEvent>
+          columns={columns}
+          data={events}
+          keyExtractor={(row) => row.id}
+          loading={isDataLoading}
+          emptyState={emptyState}
+        />
+      )}
 
       {events.length > 0 && (
-        <div className="flex items-center justify-between mt-4">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-4">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="text-sm text-text-tertiary">
               {events.length} events on this page
               {hasNext ? ' (more available)' : ''}
@@ -460,26 +407,16 @@ export default function AuditLogPage({ hideHeader = false }: { hideHeader?: bool
 
           {(hasPrevious || hasNext) && (
             <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={!hasPrevious || isDataLoading}
-                onClick={handlePrevious}
-              >
+              <Button variant="ghost" size="sm" disabled={!hasPrevious || isDataLoading} onClick={handlePrevious}>
                 Previous
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={!hasNext || isDataLoading}
-                onClick={handleNext}
-              >
+              <Button variant="ghost" size="sm" disabled={!hasNext || isDataLoading} onClick={handleNext}>
                 Next
               </Button>
             </div>
           )}
         </div>
       )}
-    </>
+    </div>
   )
 }

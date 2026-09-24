@@ -1,6 +1,7 @@
 import React from 'react'
 import { cn } from '../../lib/utils'
 import { Button } from './Button'
+import { ArrowDown, ArrowUp, ChevronRight, ChevronsUpDown } from './icons'
 
 export interface Column<T> {
   key: string
@@ -48,9 +49,10 @@ export interface TableProps<T> {
 
 function SortIndicator({ column, sort }: { column: string; sort?: SortState }) {
   if (!sort || sort.column !== column) {
-    return <span aria-hidden="true" className="text-text-tertiary/50">↕</span>
+    return <ChevronsUpDown aria-hidden="true" className="w-3.5 h-3.5 text-text-tertiary" />
   }
-  return <span aria-hidden="true">{sort.direction === 'asc' ? '↑' : '↓'}</span>
+  const Arrow = sort.direction === 'asc' ? ArrowUp : ArrowDown
+  return <Arrow aria-hidden="true" className="w-3.5 h-3.5" />
 }
 
 function SkeletonRows({
@@ -85,20 +87,10 @@ const alignClass: Record<NonNullable<Column<unknown>['align']>, string> = {
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
   return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+    <ChevronRight
       aria-hidden="true"
-      className={cn('transition-transform duration-150', expanded && 'rotate-90')}
-    >
-      <polyline points="9 18 15 12 9 6" />
-    </svg>
+      className={cn('w-3.5 h-3.5 transition-transform duration-150', expanded && 'rotate-90')}
+    />
   )
 }
 

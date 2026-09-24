@@ -36,7 +36,7 @@ export function Dialog({
 
   return ReactDOM.createPortal(
     <div
-      className="dialog-overlay fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm"
+      className="dialog-overlay fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
       onMouseDown={handleBackdropMouseDown}
     >
       <div
@@ -44,16 +44,17 @@ export function Dialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="dialog-panel rounded-2xl shadow-2xl max-w-xl w-full mx-4 p-6 border border-border border-t-accent/15 max-h-[90vh] flex flex-col backdrop-blur-xl"
+        className="dialog-panel rounded-2xl shadow-2xl w-full max-w-[calc(100vw-2rem)] sm:max-w-xl p-4 sm:p-6 border border-border border-t-accent/15 max-h-[calc(100dvh-2rem)] sm:max-h-[90vh] flex flex-col backdrop-blur-xl"
         onKeyDown={handlePanelKeyDown}
       >
-        <div className="flex items-center justify-between mb-4">
-          <h2 id={titleId} className="text-lg font-semibold text-text-primary">
+        <div className="flex shrink-0 items-center justify-between gap-4 mb-4">
+          <h2 id={titleId} className="min-w-0 break-words text-lg font-semibold text-text-primary">
             {title}
           </h2>
           <button
+            type="button"
             onClick={onClose}
-            className="text-text-tertiary hover:text-text-primary transition-colors cursor-pointer"
+            className="shrink-0 text-text-tertiary hover:text-text-primary transition-colors cursor-pointer"
             aria-label="Close"
           >
             <svg
@@ -62,6 +63,7 @@ export function Dialog({
               viewBox="0 0 24 24"
               stroke="currentColor"
               strokeWidth={2}
+              aria-hidden="true"
             >
               <path
                 strokeLinecap="round"
@@ -73,11 +75,11 @@ export function Dialog({
         </div>
 
         <div
-          className={cn('flex-1 overflow-y-auto', className)}
+          className={cn('min-h-0 flex-1 overflow-y-auto', className)}
           style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.15) transparent' }}
         >{children}</div>
 
-        {footer != null && <div className="mt-6">{footer}</div>}
+        {footer != null && <div className="mt-4 shrink-0 sm:mt-6">{footer}</div>}
       </div>
     </div>,
     document.body,

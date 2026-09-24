@@ -3,6 +3,11 @@ import { useMemo, type ReactNode } from 'react'
 import { Dialog } from '../components/ui/Dialog'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
+import { Tooltip } from '../components/ui/Tooltip'
+import { Skeleton } from '../components/ui/Skeleton'
+import { ErrorState } from '../components/ui/ErrorState'
+import { CircleAlert, CircleCheck, CircleX, TriangleAlert } from '../components/ui/icons'
+import type { LucideIcon } from '../components/ui/icons'
 import type { ModelResponse, DeploymentResponse } from '../hooks/useModels'
 import type { ModelHealthInfo } from '../hooks/useModelHealth'
 import { useCrossOrgUsage } from '../hooks/useUsage'
@@ -31,12 +36,21 @@ const typeLabels: Record<string, string> = {
 
 const healthConfig: Record<
   ModelHealthInfo['status'],
-  { dotClass: string; label: string; badge: 'success' | 'warning' | 'error' | 'muted' }
+  { Icon: LucideIcon; label: string; badge: 'success' | 'warning' | 'error' | 'muted' }
 > = {
-  healthy: { dotClass: 'bg-success', label: 'Healthy', badge: 'success' },
-  degraded: { dotClass: 'bg-warning', label: 'Degraded', badge: 'warning' },
-  unhealthy: { dotClass: 'bg-error', label: 'Unhealthy', badge: 'error' },
-  unknown: { dotClass: 'bg-text-tertiary', label: 'Unknown', badge: 'muted' },
+  healthy: { Icon: CircleCheck, label: 'Healthy', badge: 'success' },
+  degraded: { Icon: TriangleAlert, label: 'Degraded', badge: 'warning' },
+  unhealthy: { Icon: CircleX, label: 'Unhealthy', badge: 'error' },
+  unknown: { Icon: CircleAlert, label: 'Unknown', badge: 'muted' },
+}
+
+function HealthStatusBadge({ status }: { status: ModelHealthInfo['status'] }) {
+  const cfg = healthConfig[status] ?? healthConfig.unknown
+  return (
+    <Badge variant={cfg.badge} className="font-sans" icon={<cfg.Icon className="h-3.5 w-3.5" aria-hidden="true" />}>
+      {cfg.label}
+    </Badge>
+  )
 }
 
 function PerfBadge({ ms }: { ms: number }) {
@@ -158,7 +172,6 @@ function DeploymentHealthRow({
 }) {
   const providerKey = isKnownProvider(deployment.provider) ? deployment.provider : 'custom'
   const status = health?.status ?? 'unknown'
-  const cfg = healthConfig[status]
 
   return (
     <tr className="border-b border-border/30 last:border-b-0">
@@ -170,21 +183,24 @@ function DeploymentHealthRow({
       </td>
       <td className="px-3 py-2.5 text-sm">
         <div className="flex items-center gap-2">
-          <span className={cn('w-2 h-2 rounded-full shrink-0', cfg.dotClass)} />
-          <Badge variant={cfg.badge}>{cfg.label}</Badge>
+          <HealthStatusBadge status={status} />
           {health && health.latency_ms > 0 && (
             <span className="text-xs text-text-tertiary tabular-nums">{health.latency_ms}ms</span>
           )}
         </div>
       </td>
-      <td className="px-3 py-2.5 text-xs font-mono text-text-tertiary max-w-[200px] truncate" title={deployment.base_url}>
-        {deployment.base_url}
+      <td className="px-3 py-2.5 text-xs font-mono text-text-tertiary">
+        <Tooltip content={deployment.base_url}>
+          <span className="block max-w-[200px] truncate">{deployment.base_url}</span>
+        </Tooltip>
       </td>
       <td className="px-3 py-2.5 text-sm text-text-secondary">{deployment.weight}</td>
       <td className="px-3 py-2.5 text-sm text-text-secondary">{deployment.priority}</td>
       <td className="px-3 py-2.5 text-xs text-text-tertiary">
         {health?.last_error ? (
-          <span className="text-error" title={health.last_error}>{health.last_error}</span>
+          <Tooltip content={health.last_error}>
+            <span className="block max-w-[240px] truncate text-error">{health.last_error}</span>
+          </Tooltip>
         ) : (
           '—'
         )}
@@ -206,19 +222,21 @@ export function ModelDetailDialog({ model, healthByName, onClose, onEdit, readOn
   const from24h = useMemo(() => new Date(Date.now() - 86_400_000).toISOString(), [model?.id])
   const from7d = useMemo(() => new Date(Date.now() - 7 * 86_400_000).toISOString(), [model?.id])
 
-  const { data: usage24hData, isLoading: usage24hLoading } = useCrossOrgUsage(
+  const usage24hQuery = useCrossOrgUsage(
     { from: from24h, to: nowIso, groupBy: 'model' },
     model != null && !readOnly,
   )
-  const { data: usage7dData, isLoading: usage7dLoading } = useCrossOrgUsage(
+  const usage7dQuery = useCrossOrgUsage(
     { from: from7d, to: nowIso, groupBy: 'model' },
     model != null && !readOnly,
   )
 
+  const { data: usage24hData, isLoading: usage24hLoading } = usage24hQuery
+  const { data: usage7dData, isLoading: usage7dLoading } = usage7dQuery
+
   if (!model) return null
 
   const health = resolveModelHealth(model, healthByName)
-  const healthCfg = healthConfig[health?.status ?? 'unknown']
   const providerKey = isKnownProvider(model.provider) ? model.provider : 'custom'
   const usage24h = usage24hData?.data.find((d) => d.group_key === model.name)
   const usage7d = usage7dData?.data.find((d) => d.group_key === model.name)
@@ -258,8 +276,7 @@ export function ModelDetailDialog({ model, healthByName, onClose, onEdit, readOn
           <Badge variant="info">{typeLabels[model.type] ?? model.type}</Badge>
           {!readOnly && <Badge variant={model.source === 'yaml' ? 'muted' : 'default'}>{model.source}</Badge>}
           <div className="flex items-center gap-2 ml-1">
-            <span className={cn('w-2 h-2 rounded-full', healthCfg.dotClass)} />
-            <Badge variant={healthCfg.badge}>{healthCfg.label}</Badge>
+            <HealthStatusBadge status={health?.status ?? 'unknown'} />
             {health && health.latency_ms > 0 && (
               <>
                 <span className="text-sm text-text-secondary tabular-nums">{health.latency_ms}ms</span>
@@ -304,7 +321,14 @@ export function ModelDetailDialog({ model, healthByName, onClose, onEdit, readOn
           <h3 className="text-sm font-semibold text-text-secondary mb-3">Usage</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {usage24hLoading ? (
-              <div className="rounded-lg border border-border bg-bg-secondary p-4 text-sm text-text-tertiary">Loading 24h usage…</div>
+              <Skeleton className="h-[164px] rounded-lg" />
+            ) : usage24hQuery.isError && !usage24hData ? (
+              <ErrorState
+                variant="card"
+                title="Couldn't load 24h usage"
+                error={usage24hQuery.error}
+                onRetry={() => void usage24hQuery.refetch()}
+              />
             ) : (
               <UsageStatCard
                 label="Last 24 hours"
@@ -315,7 +339,14 @@ export function ModelDetailDialog({ model, healthByName, onClose, onEdit, readOn
               />
             )}
             {usage7dLoading ? (
-              <div className="rounded-lg border border-border bg-bg-secondary p-4 text-sm text-text-tertiary">Loading 7d usage…</div>
+              <Skeleton className="h-[164px] rounded-lg" />
+            ) : usage7dQuery.isError && !usage7dData ? (
+              <ErrorState
+                variant="card"
+                title="Couldn't load 7d usage"
+                error={usage7dQuery.error}
+                onRetry={() => void usage7dQuery.refetch()}
+              />
             ) : (
               <UsageStatCard
                 label="Last 7 days"

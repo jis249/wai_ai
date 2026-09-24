@@ -6,7 +6,11 @@ import { Button } from '../components/ui/Button'
 import { Select } from '../components/ui/Select'
 import type { SelectOption } from '../components/ui/Select'
 import { Toggle } from '../components/ui/Toggle'
-import { useMe } from '../hooks/useMe'
+import { Card } from '../components/ui/Card'
+import { ErrorState } from '../components/ui/ErrorState'
+import { Skeleton } from '../components/ui/Skeleton'
+import { usePermissions } from '../hooks/usePermissions'
+import { errorMessage } from '../lib/errors'
 import { useModels } from '../hooks/useModels'
 import { useToast } from '../hooks/useToast'
 import {
@@ -29,9 +33,9 @@ const COMPLEX_OPTIONS: SelectOption[] = [
 ]
 
 export default function AutoRoutingPage({ hideHeader = false }: { hideHeader?: boolean }) {
-  const { data: me, isLoading: meLoading } = useMe()
-  const isSystemAdmin = me?.is_system_admin === true || me?.role === 'system_admin'
-  const { data: config, isLoading, isError } = useAutoRouterConfig(isSystemAdmin)
+  const { isSystemAdmin, isReady } = usePermissions()
+  const configQuery = useAutoRouterConfig(isSystemAdmin)
+  const { data: config, isLoading, isError } = configQuery
   const { data: modelsPage } = useModels()
   const update = useUpdateAutoRouterConfig()
   const { toast } = useToast()
@@ -68,7 +72,7 @@ export default function AutoRoutingPage({ hideHeader = false }: { hideHeader?: b
     [chatModels],
   )
 
-  if (!meLoading && me && !isSystemAdmin) {
+  if (isReady && !isSystemAdmin) {
     return <Navigate to="/" replace />
   }
 
@@ -96,7 +100,7 @@ export default function AutoRoutingPage({ hideHeader = false }: { hideHeader?: b
     } catch (err) {
       toast({
         variant: 'error',
-        message: err instanceof Error ? err.message : 'Failed to save auto routing',
+        message: errorMessage(err, 'Failed to save auto routing'),
       })
     }
   }
@@ -115,15 +119,15 @@ export default function AutoRoutingPage({ hideHeader = false }: { hideHeader?: b
       />
       )}
       {hideHeader && (
-        <div className="flex justify-end mb-4">
+        <div className="flex flex-wrap justify-end gap-2 mb-4">
           <Button onClick={onSave} disabled={!dirty || update.isPending || isLoading}>
             {update.isPending ? 'Saving…' : 'Save changes'}
           </Button>
         </div>
       )}
 
-      <div className="rounded-lg border border-border bg-bg-secondary max-w-3xl">
-        <div className="px-6 py-4 border-b border-border">
+      <Card padding="none" className="max-w-3xl min-w-0">
+        <div className="px-4 sm:px-6 py-4 border-b border-border">
           <h2 className="text-sm font-semibold text-text-primary">Router settings</h2>
           <p className="text-xs text-text-tertiary mt-0.5">
             Clients call <span className="font-mono">model: &quot;auto&quot;</span>. Simple and coding prompts use the
@@ -131,17 +135,22 @@ export default function AutoRoutingPage({ hideHeader = false }: { hideHeader?: b
           </p>
         </div>
 
-        <div className="p-6 space-y-6">
+        <div className="p-4 sm:p-6 space-y-6">
           {isLoading && (
-            <div className="space-y-3 animate-pulse">
-              <div className="h-4 w-40 rounded bg-bg-tertiary" />
-              <div className="h-10 w-full rounded bg-bg-tertiary" />
-              <div className="h-10 w-full rounded bg-bg-tertiary" />
+            <div className="space-y-3" aria-busy="true" aria-label="Loading auto-router settings">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
             </div>
           )}
 
-          {isError && (
-            <p className="text-sm text-error">Could not load auto-router settings.</p>
+          {isError && config == null && (
+            <ErrorState
+              title="Couldn't load auto-router settings"
+              error={configQuery.error}
+              onRetry={() => void configQuery.refetch()}
+              retrying={configQuery.isFetching}
+            />
           )}
 
           {config && (
@@ -164,13 +173,8 @@ export default function AutoRoutingPage({ hideHeader = false }: { hideHeader?: b
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-medium text-text-tertiary uppercase tracking-wider">
-                  Default model
-                </label>
-                <p className="text-xs text-text-tertiary">
-                  Used for everyday chat and coding prompts (classifier uses this when unsure unless overridden).
-                </p>
                 <Select
+                  label="Default model"
                   value={defaultModel}
                   onChange={(v) => {
                     setDefaultModel(v)
@@ -183,16 +187,14 @@ export default function AutoRoutingPage({ hideHeader = false }: { hideHeader?: b
                   searchable={modelOptions.length > 8}
                   placeholder="Select default model"
                 />
+                <p className="text-xs text-text-tertiary">
+                  Used for everyday chat and coding prompts (classifier uses this when unsure unless overridden).
+                </p>
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-medium text-text-tertiary uppercase tracking-wider">
-                  Complex prompts
-                </label>
-                <p className="text-xs text-text-tertiary">
-                  Architecture, long reasoning, multi-step design, and similar hard prompts.
-                </p>
                 <Select
+                  label="Complex prompts"
                   value={complexMode}
                   onChange={(v) => {
                     setComplexMode(v as ComplexMode)
@@ -200,14 +202,15 @@ export default function AutoRoutingPage({ hideHeader = false }: { hideHeader?: b
                   }}
                   options={COMPLEX_OPTIONS}
                 />
+                <p className="text-xs text-text-tertiary">
+                  Architecture, long reasoning, multi-step design, and similar hard prompts.
+                </p>
               </div>
 
               {complexMode === 'fixed' && (
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-text-tertiary uppercase tracking-wider">
-                    Complex model
-                  </label>
                   <Select
+                    label="Complex model"
                     value={complexModel}
                     onChange={(v) => {
                       setComplexModel(v)
@@ -221,13 +224,8 @@ export default function AutoRoutingPage({ hideHeader = false }: { hideHeader?: b
               )}
 
               <div className="space-y-2">
-                <label className="text-xs font-medium text-text-tertiary uppercase tracking-wider">
-                  Classifier model
-                </label>
-                <p className="text-xs text-text-tertiary">
-                  Small helper call when heuristics are unsure. Usually same as the default model.
-                </p>
                 <Select
+                  label="Classifier model"
                   value={classifierModel}
                   onChange={(v) => {
                     setClassifierModel(v)
@@ -237,11 +235,14 @@ export default function AutoRoutingPage({ hideHeader = false }: { hideHeader?: b
                   searchable={modelOptions.length > 8}
                   placeholder="Select classifier model"
                 />
+                <p className="text-xs text-text-tertiary">
+                  Small helper call when heuristics are unsure. Usually same as the default model.
+                </p>
               </div>
             </>
           )}
         </div>
-      </div>
+      </Card>
     </>
   )
 }

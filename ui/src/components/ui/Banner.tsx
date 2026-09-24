@@ -1,10 +1,14 @@
+import type { ReactNode } from 'react'
 import { cn } from '../../lib/utils'
+import { X } from './icons'
 
 export interface BannerProps {
   variant: 'info' | 'warning' | 'error' | 'success'
   title: string
   description?: string
   onDismiss?: (e: React.MouseEvent) => void
+  /** Optional action (e.g. a Button) rendered at the end of the banner. */
+  action?: ReactNode
   className?: string
 }
 
@@ -29,7 +33,7 @@ const descriptionClasses: Record<BannerProps['variant'], string> = {
   success: 'text-success/80',
 }
 
-export function Banner({ variant, title, description, onDismiss, className }: BannerProps) {
+export function Banner({ variant, title, description, onDismiss, action, className }: BannerProps) {
   return (
     <div
       role={variant === 'error' ? 'alert' : 'status'}
@@ -52,6 +56,7 @@ export function Banner({ variant, title, description, onDismiss, className }: Ba
           <p className={cn('mt-0.5 text-sm', descriptionClasses[variant])}>{description}</p>
         )}
       </div>
+      {action !== undefined && <div className="shrink-0 self-center">{action}</div>}
       {onDismiss !== undefined && (
         <button
           type="button"
@@ -62,16 +67,7 @@ export function Banner({ variant, title, description, onDismiss, className }: Ba
             'hover:opacity-70 focus:outline-none focus:ring-2 focus:ring-current focus:ring-offset-1 focus:ring-offset-transparent',
           )}
         >
-          <svg
-            aria-hidden="true"
-            className="h-3.5 w-3.5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2.5}
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
+          <X aria-hidden="true" className="h-3.5 w-3.5" />
         </button>
       )}
     </div>

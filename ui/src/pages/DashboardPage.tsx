@@ -2,8 +2,26 @@ import { useState, useMemo } from 'react'
 import { PageHeader } from '../components/ui/PageHeader'
 import { StatCard } from '../components/ui/StatCard'
 import { Banner } from '../components/ui/Banner'
+import { Badge } from '../components/ui/Badge'
+import { Card, CardHeader } from '../components/ui/Card'
 import { Dialog } from '../components/ui/Dialog'
 import { Button } from '../components/ui/Button'
+import { EmptyState } from '../components/ui/EmptyState'
+import { ErrorState } from '../components/ui/ErrorState'
+import { QueryState } from '../components/ui/QueryState'
+import { Skeleton } from '../components/ui/Skeleton'
+import { TimeRangePicker } from '../components/ui/TimeRangePicker'
+import {
+  Activity,
+  ChartColumn,
+  CircleX,
+  DollarSign,
+  ExternalLink,
+  HeartPulse,
+  KeyRound,
+  TriangleAlert,
+  Zap,
+} from '../components/ui/icons'
 import { AreaChart } from '../components/ui/charts/AreaChart'
 import { DonutChart } from '../components/ui/charts/DonutChart'
 import { HorizontalBar } from '../components/ui/charts/HorizontalBar'
@@ -19,21 +37,13 @@ import { useModelHealth } from '../hooks/useModelHealth'
 import type { ModelHealthInfo } from '../hooks/useModelHealth'
 import { useUpdateCheck } from '../hooks/useUpdateCheck'
 import { formatTokens, formatCost, formatNumber } from '../lib/utils'
-
-// ---------------------------------------------------------------------------
-// Time range helpers
-// ---------------------------------------------------------------------------
-
-type TimeRange = '24h' | '7d' | '30d'
-
-function getTimeRange(range: TimeRange): { from: string; to: string } {
-  const to = new Date()
-  const from = new Date()
-  if (range === '24h') from.setHours(from.getHours() - 24)
-  else if (range === '7d') from.setDate(from.getDate() - 7)
-  else from.setDate(from.getDate() - 30)
-  return { from: from.toISOString(), to: to.toISOString() }
-}
+import { chartColor } from '../lib/chartColors'
+import {
+  DASHBOARD_TIME_RANGE_PRESETS,
+  timeRangeLabel,
+  useTimeRange,
+  type TimeRangeValue,
+} from '../lib/timeRange'
 
 // ---------------------------------------------------------------------------
 // BudgetWarningBanners
@@ -69,7 +79,15 @@ function ProgressBar({ label, used, limit }: { label: string; used: number; limi
           {formatNumber(used)} / {formatNumber(limit)}
         </span>
       </div>
-      <div className="h-2 bg-bg-tertiary rounded-full overflow-hidden">
+      <div
+        className="h-2 bg-bg-tertiary rounded-full overflow-hidden"
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(pct)}
+        aria-valuetext={`${Math.round(pct)}% used`}
+      >
         <div className={`h-full rounded-full transition-all duration-300 ${color}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
@@ -84,44 +102,12 @@ function BudgetSection({ orgId, tokens24h }: { orgId: string; tokens24h: number 
   const { data: org } = useOrg(orgId)
   if (!org || org.daily_token_limit <= 0) return null
   return (
-    <div className="bg-bg-secondary rounded-xl border border-border p-6">
-      <h2 className="text-lg font-semibold text-text-primary mb-6">Token Budget</h2>
+    <Card>
+      <CardHeader title="Token Budget" />
       <div className="space-y-4">
         <ProgressBar label="Daily Token Budget" used={tokens24h} limit={org.daily_token_limit} />
       </div>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// TimeRangePills
-// ---------------------------------------------------------------------------
-
-function TimeRangePills({
-  value,
-  onChange,
-}: {
-  value: TimeRange
-  onChange: (r: TimeRange) => void
-}) {
-  const ranges: TimeRange[] = ['24h', '7d', '30d']
-  return (
-    <div className="flex items-center gap-1">
-      {ranges.map((r) => (
-        <button
-          key={r}
-          type="button"
-          onClick={() => onChange(r)}
-          className={
-            value === r
-              ? 'px-3 py-1 rounded-md text-xs font-medium bg-accent/20 text-accent border border-accent/30'
-              : 'px-3 py-1 rounded-md text-xs font-medium text-text-tertiary hover:text-text-secondary hover:bg-bg-tertiary border border-transparent transition-colors'
-          }
-        >
-          {r}
-        </button>
-      ))}
-    </div>
+    </Card>
   )
 }
 
@@ -131,25 +117,9 @@ function TimeRangePills({
 
 function PerfBadge({ ms }: { ms: number }) {
   if (ms <= 0) return null
-  if (ms < 100) {
-    return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-success/10 text-success">
-        Fast
-      </span>
-    )
-  }
-  if (ms < 500) {
-    return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-warning/10 text-warning">
-        Normal
-      </span>
-    )
-  }
-  return (
-    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-error/10 text-error">
-      Slow
-    </span>
-  )
+  if (ms < 100) return <Badge variant="success">Fast</Badge>
+  if (ms < 500) return <Badge variant="warning">Normal</Badge>
+  return <Badge variant="error">Slow</Badge>
 }
 
 // ---------------------------------------------------------------------------
@@ -211,71 +181,29 @@ const performanceColumns: MiniTableColumn<PerfRow>[] = [
   },
 ]
 
-// ---------------------------------------------------------------------------
-// Icons (inline SVGs to avoid a dependency)
-// ---------------------------------------------------------------------------
+const ICON = 'w-4 h-4'
 
-function IconActivity() {
+function SectionSkeletonBars({ rows = 3 }: { rows?: number }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-    </svg>
+    <div className="space-y-5" aria-hidden="true">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="space-y-1.5">
+          <Skeleton className="h-3 w-32" />
+          <Skeleton className="h-2.5 rounded-full" />
+        </div>
+      ))}
+    </div>
   )
 }
 
-function IconZap() {
+function SectionEmpty({ title, description }: { title: string; description: string }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-    </svg>
-  )
-}
-
-function IconDollarSign() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="12" y1="1" x2="12" y2="23" />
-      <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-    </svg>
-  )
-}
-
-function IconKey() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="7.5" cy="15.5" r="5.5" />
-      <path d="M21 2l-9.6 9.6" />
-      <path d="M15.5 7.5l3 3L22 7l-3-3" />
-    </svg>
-  )
-}
-
-function IconHeartPulse() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
-      <path d="M3.22 12H9.5l1.5-3 2 4.5 1.5-3h5.27" />
-    </svg>
-  )
-}
-
-function IconAlertTriangle() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-      <line x1="12" y1="9" x2="12" y2="13" />
-      <line x1="12" y1="17" x2="12.01" y2="17" />
-    </svg>
-  )
-}
-
-function IconXCircle() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10" />
-      <line x1="15" y1="9" x2="9" y2="15" />
-      <line x1="9" y1="9" x2="15" y2="15" />
-    </svg>
+    <EmptyState
+      icon={<ChartColumn className="w-6 h-6" />}
+      title={title}
+      description={description}
+      className="py-8"
+    />
   )
 }
 
@@ -291,9 +219,10 @@ const scopeDescriptions: Record<string, string> = {
 
 export default function DashboardPage() {
   const { data: me } = useMe()
-  const { data: stats, isLoading: statsLoading } = useDashboardStats()
+  const statsQuery = useDashboardStats()
+  const { data: stats, isLoading: statsLoading } = statsQuery
   const { data: updateInfo } = useUpdateCheck()
-  const [timeRange, setTimeRange] = useState<TimeRange>('7d')
+  const [timeRange, setTimeRange] = useState<TimeRangeValue>('7d')
   const [showUpdateDialog, setShowUpdateDialog] = useState(false)
 
   const availableVersion = updateInfo?.available_version
@@ -313,18 +242,17 @@ export default function DashboardPage() {
   const canViewOrgUsage = me?.is_system_admin === true || me?.role === 'org_admin'
   const orgId = me?.org_id ?? ''
 
-  // Time-series and model usage share the same range
-  const { from, to } = useMemo(() => getTimeRange(timeRange), [timeRange])
+  // Time-series, top models and team usage all share the page-level range
+  const { from, to, preset } = useTimeRange(timeRange)
+  const emptyPeriodDescription =
+    preset != null
+      ? `No usage recorded in the ${timeRangeLabel(timeRange, 'long').toLowerCase()}.`
+      : 'No usage recorded in the selected range.'
 
-  const orgTopModels = useUsage(
-    orgId,
-    from,
-    to,
-    'model',
-    !!me && canViewOrgUsage,
-  )
+  const orgTopModels = useUsage(orgId, from, to, 'model', !!me && canViewOrgUsage)
   const myTopModels = useMyUsage(from, to, 'model', !!me && !canViewOrgUsage)
-  const { data: topModels, isLoading: modelsLoading } = canViewOrgUsage ? orgTopModels : myTopModels
+  const topModelsQuery = canViewOrgUsage ? orgTopModels : myTopModels
+  const { data: topModels } = topModelsQuery
   const { data: modelHealth } = useModelHealth()
 
   // Performance rows combining usage data with health check latency
@@ -333,26 +261,12 @@ export default function DashboardPage() {
     [topModels?.data, modelHealth?.models],
   )
 
-  const orgUsageSeries = useUsage(
-    orgId,
-    from,
-    to,
-    'day',
-    !!me && canViewOrgUsage,
-  )
+  const orgUsageSeries = useUsage(orgId, from, to, 'day', !!me && canViewOrgUsage)
   const myUsageSeries = useMyUsage(from, to, 'day', !!me && !canViewOrgUsage)
-  const { data: usageSeries, isLoading: seriesLoading } = canViewOrgUsage ? orgUsageSeries : myUsageSeries
+  const seriesQuery = canViewOrgUsage ? orgUsageSeries : myUsageSeries
 
   // Team usage (admin only)
-  const { data: teamUsage, isLoading: teamUsageLoading } = useUsage(
-    orgId,
-    from,
-    to,
-    'team',
-    !!me && canViewOrgUsage,
-  )
-
-  const emptyPeriodLabel = `No data for the last ${timeRange}`
+  const teamUsageQuery = useUsage(orgId, from, to, 'team', !!me && canViewOrgUsage)
 
   const scope = stats?.scope ?? (canViewOrgUsage ? 'org' : 'user')
   const description = scopeDescriptions[scope] ?? 'Your wai usage overview'
@@ -376,15 +290,6 @@ export default function DashboardPage() {
 
   const showModelHealth = healthCounts.healthy + healthCounts.degraded + healthCounts.unhealthy > 0
 
-  // Build area chart data from usage series
-  const areaData = useMemo(() => {
-    if (!usageSeries?.data) return []
-    return usageSeries.data.map((d) => ({
-      label: d.group_key,
-      value: d.total_requests,
-    }))
-  }, [usageSeries])
-
   // Build horizontal bar data for top models
   const topModelsBars = useMemo(() => {
     if (!topModels?.data) return []
@@ -405,28 +310,30 @@ export default function DashboardPage() {
     const totalCompletion = topModels.data.reduce((acc, m) => acc + m.completion_tokens, 0)
     if (totalPrompt + totalCompletion === 0) return []
     return [
-      { label: 'Prompt', value: totalPrompt, color: '#8b5cf6' },
-      { label: 'Completion', value: totalCompletion, color: '#25252d' },
+      { label: 'Prompt', value: totalPrompt, color: chartColor(1) },
+      { label: 'Completion', value: totalCompletion, color: chartColor(0) },
     ]
   }, [topModels])
 
-  // Build team usage bars (admin only)
-  const teamBars = useMemo(() => {
-    if (!teamUsage?.data) return []
-    return teamUsage.data.slice(0, 6).map((t) => ({
-      label: t.group_label || t.group_key,
-      value: t.total_requests,
-      detail: `${formatNumber(t.total_requests)} Req`,
-    }))
-  }, [teamUsage])
-
-  const skeletonValue = '...'
+  const statValue = (render: () => string) => (statsLoading ? '…' : stats == null ? '—' : render())
 
   return (
     <>
-      <PageHeader title="Dashboard" description={description} />
+      <PageHeader
+        title="Dashboard"
+        description={description}
+        actions={
+          <TimeRangePicker
+            value={timeRange}
+            onChange={setTimeRange}
+            presets={DASHBOARD_TIME_RANGE_PRESETS}
+            size="sm"
+            aria-label="Dashboard time range"
+          />
+        }
+      />
 
-      <div className="space-y-6">
+      <div className="min-w-0 space-y-6">
         {/* Budget warnings */}
         {(stats?.budget_warnings?.length ?? 0) > 0 && (
           <BudgetWarningBanners warnings={stats?.budget_warnings ?? []} />
@@ -434,74 +341,81 @@ export default function DashboardPage() {
 
         {/* Update notification */}
         {updateInfo?.needs_update && !updateDismissed && (
-          <div onClick={() => setShowUpdateDialog(true)} className="cursor-pointer">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <Banner
               variant="info"
+              className="min-w-0 flex-1"
               title={`wai ${updateInfo.available_version} is available (current: ${updateInfo.current_version})`}
-              onDismiss={(e) => {
-                e.stopPropagation()
-                dismissUpdate()
-              }}
+              onDismiss={dismissUpdate}
             />
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setShowUpdateDialog(true)}
+              className="self-start sm:self-auto"
+            >
+              View release notes
+            </Button>
           </div>
         )}
 
         {/* Stat cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <StatCard
-            label="Requests (24h)"
-            value={statsLoading ? skeletonValue : formatNumber(stats?.requests_24h ?? 0)}
-            icon={<IconActivity />}
-            iconColor="purple"
+        {statsQuery.isError && stats == null ? (
+          <ErrorState
+            variant="card"
+            title="Couldn't load dashboard stats"
+            error={statsQuery.error}
+            onRetry={() => void statsQuery.refetch()}
+            retrying={statsQuery.isFetching}
           />
-          <StatCard
-            label="Tokens (24h)"
-            value={statsLoading ? skeletonValue : formatTokens(stats?.tokens_24h ?? 0)}
-            icon={<IconZap />}
-            iconColor="blue"
-          />
-          <StatCard
-            label="Est. Cost (24h)"
-            value={statsLoading ? skeletonValue : formatCost(stats?.cost_estimate_24h ?? 0)}
-            icon={<IconDollarSign />}
-            iconColor="green"
-          />
-          <StatCard
-            label="Active Keys"
-            value={statsLoading ? skeletonValue : formatNumber(stats?.active_keys ?? 0)}
-            icon={<IconKey />}
-            iconColor="pink"
-          />
-        </div>
+        ) : statsLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5" aria-busy="true" aria-label="Loading stats">
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-[124px] rounded-xl" />
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+            <StatCard
+              label="Requests (24h)"
+              value={statValue(() => formatNumber(stats?.requests_24h ?? 0))}
+              icon={<Activity className={ICON} />}
+              iconColor="purple"
+            />
+            <StatCard
+              label="Tokens (24h)"
+              value={statValue(() => formatTokens(stats?.tokens_24h ?? 0))}
+              icon={<Zap className={ICON} />}
+              iconColor="blue"
+            />
+            <StatCard
+              label="Est. Cost (24h)"
+              value={statValue(() => formatCost(stats?.cost_estimate_24h ?? 0))}
+              icon={<DollarSign className={ICON} />}
+              iconColor="green"
+            />
+            <StatCard
+              label="Active Keys"
+              value={statValue(() => formatNumber(stats?.active_keys ?? 0))}
+              icon={<KeyRound className={ICON} />}
+              iconColor="pink"
+            />
+          </div>
+        )}
 
         {/* Model Health summary */}
         {!statsLoading && showModelHealth && (
-            <div>
-              <h2 className="text-sm font-medium text-text-tertiary uppercase tracking-wider mb-3">
-                Model Health
-              </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <StatCard
-                  label="Healthy"
-                  value={healthCounts.healthy}
-                  icon={<IconHeartPulse />}
-                  iconColor="green"
-                />
-                <StatCard
-                  label="Degraded"
-                  value={healthCounts.degraded}
-                  icon={<IconAlertTriangle />}
-                  iconColor="yellow"
-                />
-                <StatCard
-                  label="Unhealthy"
-                  value={healthCounts.unhealthy}
-                  icon={<IconXCircle />}
-                  iconColor="red"
-                />
-              </div>
+          <section aria-labelledby="dash-model-health">
+            <h2 id="dash-model-health" className="text-sm font-medium text-text-tertiary uppercase tracking-wider mb-3">
+              Model Health
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <StatCard label="Healthy" value={healthCounts.healthy} icon={<HeartPulse className={ICON} />} iconColor="green" />
+              <StatCard label="Degraded" value={healthCounts.degraded} icon={<TriangleAlert className={ICON} />} iconColor="yellow" />
+              <StatCard label="Unhealthy" value={healthCounts.unhealthy} icon={<CircleX className={ICON} />} iconColor="red" />
             </div>
-          )}
+          </section>
+        )}
 
         {/* Token budget section */}
         {canViewOrgUsage && me?.org_id != null && !statsLoading && (
@@ -510,129 +424,112 @@ export default function DashboardPage() {
 
         {/* Requests over time */}
         {me != null && (canViewOrgUsage ? orgId !== '' : true) && (
-          <div className="bg-bg-secondary rounded-xl border border-border p-6">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-semibold text-text-primary">Requests over Time</h2>
-              <TimeRangePills value={timeRange} onChange={setTimeRange} />
-            </div>
-            {seriesLoading ? (
-              <div
-                className="rounded-lg bg-bg-tertiary animate-pulse"
-                style={{ height: 220 }}
-                aria-label="Loading chart"
-              />
-            ) : areaData.length > 0 ? (
-              <AreaChart
-                data={areaData}
-                height={220}
-                color="#8b5cf6"
-                formatValue={formatNumber}
-              />
-            ) : (
-              <div
-                className="flex items-center justify-center text-text-tertiary text-sm"
-                style={{ height: 220 }}
-              >
-                No data for this period
-              </div>
-            )}
-          </div>
+          <Card>
+            <CardHeader title="Requests over Time" description={timeRangeLabel(timeRange, 'long')} />
+            <QueryState
+              query={seriesQuery}
+              errorTitle="Couldn't load request history"
+              loading={<Skeleton className="w-full rounded-lg h-[220px]" />}
+              empty={<SectionEmpty title="No requests" description={emptyPeriodDescription} />}
+            >
+              {(series) => (
+                <AreaChart
+                  data={series.data.map((d) => ({ label: d.group_key, value: d.total_requests }))}
+                  height={220}
+                  color={chartColor(0)}
+                  formatValue={formatNumber}
+                />
+              )}
+            </QueryState>
+          </Card>
         )}
 
         {/* Top models + token distribution */}
         {me != null && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Top Models */}
-            <div className="bg-bg-secondary rounded-xl border border-border p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-semibold text-text-primary">Top Models</h2>
-                <TimeRangePills value={timeRange} onChange={setTimeRange} />
-              </div>
-              {modelsLoading ? (
-                <div className="space-y-5">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="space-y-1.5">
-                      <div className="h-3 w-32 bg-bg-tertiary rounded animate-pulse" />
-                      <div className="h-2.5 bg-bg-tertiary rounded-full animate-pulse" />
-                    </div>
-                  ))}
-                </div>
-              ) : topModelsBars.length > 0 ? (
-                <HorizontalBar items={topModelsBars} />
-              ) : (
-                <p className="text-sm text-text-tertiary">{emptyPeriodLabel}</p>
-              )}
-            </div>
+            <Card className="min-w-0">
+              <CardHeader title="Top Models" description="By total tokens" />
+              <QueryState
+                query={topModelsQuery}
+                errorTitle="Couldn't load model usage"
+                loading={<SectionSkeletonBars />}
+                empty={<SectionEmpty title="No model usage" description={emptyPeriodDescription} />}
+              >
+                {() => <HorizontalBar items={topModelsBars} />}
+              </QueryState>
+            </Card>
 
-            {/* Token Distribution */}
-            <div className="bg-bg-secondary rounded-xl border border-border p-6">
-              <h2 className="text-lg font-semibold text-text-primary mb-6">Token Distribution</h2>
-              {modelsLoading ? (
-                <div className="flex justify-center">
-                  <div className="w-48 h-48 rounded-full bg-bg-tertiary animate-pulse" />
-                </div>
-              ) : donutSegments.length > 0 ? (
-                <div className="flex justify-center">
-                  <DonutChart
-                    segments={donutSegments}
-                    centerLabel="Total tokens"
-                    centerValue={formatTokens(
-                      donutSegments.reduce((acc, s) => acc + s.value, 0),
-                    )}
-                    size={192}
-                    strokeWidth={20}
-                  />
-                </div>
-              ) : (
-                <p className="text-sm text-text-tertiary">{emptyPeriodLabel}</p>
-              )}
-            </div>
+            <Card className="min-w-0">
+              <CardHeader title="Token Distribution" description="Prompt vs completion tokens" />
+              <QueryState
+                query={topModelsQuery}
+                errorTitle="Couldn't load token distribution"
+                loading={
+                  <div className="flex justify-center">
+                    <Skeleton className="w-48 h-48 rounded-full" />
+                  </div>
+                }
+                isEmpty={() => donutSegments.length === 0}
+                empty={<SectionEmpty title="No tokens" description={emptyPeriodDescription} />}
+              >
+                {() => (
+                  <div className="flex justify-center">
+                    <DonutChart
+                      segments={donutSegments}
+                      centerLabel="Total tokens"
+                      centerValue={formatTokens(donutSegments.reduce((acc, s) => acc + s.value, 0))}
+                      size={192}
+                      strokeWidth={20}
+                    />
+                  </div>
+                )}
+              </QueryState>
+            </Card>
           </div>
         )}
 
         {/* Team usage + model performance (admin only) */}
         {canViewOrgUsage && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Usage by Team */}
-            <div className="bg-bg-secondary rounded-xl border border-border p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-semibold text-text-primary">Usage by Team</h2>
-                <TimeRangePills value={timeRange} onChange={setTimeRange} />
-              </div>
-              {teamUsageLoading ? (
-                <div className="space-y-5">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="space-y-1.5">
-                      <div className="h-3 w-24 bg-bg-tertiary rounded animate-pulse" />
-                      <div className="h-2.5 bg-bg-tertiary rounded-full animate-pulse" />
-                    </div>
-                  ))}
-                </div>
-              ) : teamBars.length > 0 ? (
-                <HorizontalBar items={teamBars} color="#6366f1" />
-              ) : (
-                <p className="text-sm text-text-tertiary">{emptyPeriodLabel}</p>
-              )}
-            </div>
+            <Card className="min-w-0">
+              <CardHeader title="Usage by Team" description="By request count" />
+              <QueryState
+                query={teamUsageQuery}
+                errorTitle="Couldn't load team usage"
+                loading={<SectionSkeletonBars />}
+                empty={<SectionEmpty title="No team usage" description={emptyPeriodDescription} />}
+              >
+                {(teamUsage) => (
+                  <HorizontalBar
+                    items={teamUsage.data.slice(0, 6).map((t) => ({
+                      label: t.group_label || t.group_key,
+                      value: t.total_requests,
+                      detail: `${formatNumber(t.total_requests)} Req`,
+                    }))}
+                    color={chartColor(4)}
+                  />
+                )}
+              </QueryState>
+            </Card>
 
-            {/* Model Performance */}
-            <div className="bg-bg-secondary rounded-xl border border-border p-6">
-              <h2 className="text-lg font-semibold text-text-primary mb-6">Model Performance</h2>
-              {modelsLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="h-8 bg-bg-tertiary rounded animate-pulse" />
-                  ))}
-                </div>
-              ) : perfRows.length > 0 ? (
-                <MiniTable<PerfRow>
-                  columns={performanceColumns}
-                  data={perfRows}
-                />
-              ) : (
-                <p className="text-sm text-text-tertiary">{emptyPeriodLabel}</p>
-              )}
-            </div>
+            <Card className="min-w-0">
+              <CardHeader title="Model Performance" description="Health-check latency and throughput" />
+              <QueryState
+                query={topModelsQuery}
+                errorTitle="Couldn't load model performance"
+                loading={
+                  <div className="space-y-3" aria-hidden="true">
+                    {[1, 2, 3].map((i) => (
+                      <Skeleton key={i} className="h-8" />
+                    ))}
+                  </div>
+                }
+                isEmpty={() => perfRows.length === 0}
+                empty={<SectionEmpty title="No model usage" description={emptyPeriodDescription} />}
+              >
+                {() => <MiniTable<PerfRow> columns={performanceColumns} data={perfRows} />}
+              </QueryState>
+            </Card>
           </div>
         )}
       </div>
@@ -644,7 +541,7 @@ export default function DashboardPage() {
           onClose={() => setShowUpdateDialog(false)}
           title={`wai ${updateInfo.available_version ?? ''}`}
           footer={
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
               {updateInfo.release_url != null && (
                 <a
                   href={updateInfo.release_url}
@@ -653,27 +550,19 @@ export default function DashboardPage() {
                   className="inline-flex items-center gap-2 text-sm font-bold bg-accent hover:bg-accent/90 text-white px-4 py-2 rounded-lg transition-all duration-200"
                 >
                   View on GitHub
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
+                  <ExternalLink className={ICON} aria-hidden="true" />
+                  <span className="sr-only">(opens in a new tab)</span>
                 </a>
               )}
-              <Button
-                variant="secondary"
-                onClick={dismissUpdate}
-              >
+              <Button variant="secondary" onClick={dismissUpdate}>
                 Dismiss
               </Button>
             </div>
           }
         >
-          <p className="text-xs text-text-tertiary mb-4">
-            You are running {updateInfo.current_version}
-          </p>
+          <p className="text-xs text-text-tertiary mb-4">You are running {updateInfo.current_version}</p>
           {updateInfo.release_notes != null && (
-            <div className="text-sm text-text-secondary whitespace-pre-wrap">
-              {updateInfo.release_notes}
-            </div>
+            <div className="text-sm text-text-secondary whitespace-pre-wrap">{updateInfo.release_notes}</div>
           )}
         </Dialog>
       )}

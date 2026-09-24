@@ -184,9 +184,9 @@ async function submitDialog(dialog: HTMLElement, buttonName: string | RegExp) {
  * deployment is present before submitting.
  */
 async function addMinimalDeployment(dialog: HTMLElement) {
-  await userEvent.click(within(dialog).getByRole('button', { name: /\+ add deployment/i }))
+  await userEvent.click(within(dialog).getByRole('button', { name: /^add deployment$/i }))
 
-  // After clicking "+ Add Deployment", the inline form appears with Name, Base URL, etc.
+  // After clicking "Add deployment", the inline form appears with Name, Base URL, etc.
   // There are now two "Name" inputs in the dialog: the top-level model name and the
   // deployment name. Use getAllByRole and pick the last (inline form).
   const allNameInputs = within(dialog).getAllByRole('textbox', { name: /^name$/i })
@@ -467,7 +467,7 @@ describe('EditModelDialog — Fallback Model field', () => {
 
   /**
    * Clicks the "Edit model" button for a given model name.
-   * The edit button has title="Edit model" and lives in the same table row
+   * The edit button is an IconButton (aria-label "Edit model") in the same table row
    * as the model name text.
    */
   async function openEditDialogForModel(modelName: string) {
@@ -475,7 +475,7 @@ describe('EditModelDialog — Fallback Model field', () => {
     const modelNameEl = await screen.findByText(modelName)
     const row = modelNameEl.closest('tr')
     if (!row) throw new Error(`Could not find table row for model "${modelName}"`)
-    const editBtn = within(row).getByTitle('Edit model')
+    const editBtn = within(row).getByRole('button', { name: 'Edit model' })
     await userEvent.click(editBtn)
   }
 
@@ -621,5 +621,196 @@ describe('EditModelDialog — Fallback Model field', () => {
     expect(body).not.toHaveProperty('fallback_model_name')
     // The changed field must be present
     expect(body.timeout).toBe('60s')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Tests: search, sort, alias tag input
+// ---------------------------------------------------------------------------
+
+/** Model names in table order (second cell; the first is the expand column). */
+function tableModelNames(): string[] {
+  const table = screen.getByRole('table')
+  const rows = within(table).getAllByRole('row').slice(1)
+  return rows.map((r) => within(r).getAllByRole('cell')[1]?.textContent ?? '')
+}
+
+describe('ModelsPage — search', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('filters models by name, provider and alias', async () => {
+    const data = [
+      makeChatModel({ id: 'm1', name: 'gpt-4o', provider: 'openai' }),
+      makeChatModel({ id: 'm2', name: 'claude-sonnet', provider: 'anthropic', aliases: ['smart'] }),
+      makeChatModel({ id: 'm3', name: 'llama-70b', provider: 'vllm' }),
+    ]
+    setupFetchMock(defaultEntries(MOCK_SERVER_CONFIG_DISABLED, { data, has_more: false }))
+    renderModelsPage()
+
+    await screen.findByText('gpt-4o')
+    const search = screen.getByRole('searchbox', { name: /search models/i })
+
+    await userEvent.type(search, 'anthropic')
+    expect(screen.queryByText('gpt-4o')).not.toBeInTheDocument()
+    expect(screen.getByText('claude-sonnet')).toBeInTheDocument()
+
+    await userEvent.clear(search)
+    await userEvent.type(search, 'smart')
+    expect(screen.getByText('claude-sonnet')).toBeInTheDocument()
+    expect(screen.queryByText('llama-70b')).not.toBeInTheDocument()
+
+    await userEvent.clear(search)
+    await userEvent.type(search, 'LLAMA')
+    expect(screen.getByText('llama-70b')).toBeInTheDocument()
+    expect(screen.queryByText('claude-sonnet')).not.toBeInTheDocument()
+  })
+
+  it('shows an empty state with a clear action when nothing matches', async () => {
+    setupFetchMock(defaultEntries())
+    renderModelsPage()
+
+    await screen.findByText('gpt-4o')
+    await userEvent.type(screen.getByRole('searchbox', { name: /search models/i }), 'zzz-nope')
+
+    expect(screen.getByText(/no matching models/i)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /clear search/i }))
+    expect(screen.getByText('gpt-4o')).toBeInTheDocument()
+  })
+})
+
+describe('ModelsPage — sorting', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('sorts by name ascending then descending when the header is clicked', async () => {
+    setupFetchMock(defaultEntries())
+    renderModelsPage()
+    await screen.findByText('gpt-4o')
+
+    const nameHeader = screen.getByRole('columnheader', { name: /^name/i })
+    await userEvent.click(nameHeader)
+    expect(nameHeader).toHaveAttribute('aria-sort', 'ascending')
+    expect(tableModelNames()).toEqual(['claude-sonnet', 'gpt-4o', 'llama-70b', 'text-embed-ada'])
+
+    await userEvent.click(nameHeader)
+    expect(nameHeader).toHaveAttribute('aria-sort', 'descending')
+    expect(tableModelNames()).toEqual(['text-embed-ada', 'llama-70b', 'gpt-4o', 'claude-sonnet'])
+  })
+
+  it('sorts by provider and by status', async () => {
+    const data = [
+      makeChatModel({ id: 'm1', name: 'a-model', provider: 'vllm', is_active: false }),
+      makeChatModel({ id: 'm2', name: 'b-model', provider: 'anthropic', is_active: true }),
+      makeChatModel({ id: 'm3', name: 'c-model', provider: 'openai', is_active: false }),
+    ]
+    setupFetchMock(defaultEntries(MOCK_SERVER_CONFIG_DISABLED, { data, has_more: false }))
+    renderModelsPage()
+    await screen.findByText('a-model')
+
+    await userEvent.click(screen.getByRole('columnheader', { name: /^provider/i }))
+    expect(tableModelNames()).toEqual(['b-model', 'c-model', 'a-model'])
+
+    await userEvent.click(screen.getByRole('columnheader', { name: /^status/i }))
+    // Active first, ties broken by name
+    expect(tableModelNames()).toEqual(['b-model', 'a-model', 'c-model'])
+  })
+})
+
+describe('ModelsPage — row actions menu', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('deactivates a model from the More menu', async () => {
+    const calls: string[] = []
+    setupFetchMock(defaultEntries())
+    const baseFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(`${(init?.method ?? 'GET').toUpperCase()} ${String(input)}`)
+      return baseFetch(input, init)
+    }))
+    renderModelsPage()
+
+    const nameEl = await screen.findByRole('button', { name: 'gpt-4o' })
+    await userEvent.click(within(nameEl.closest('tr')!).getByRole('button', { name: /more actions for gpt-4o/i }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: /deactivate/i }))
+
+    await waitFor(() => expect(calls).toContain('PATCH /api/v1/models/model-1/deactivate'))
+  })
+})
+
+describe('Alias tag input', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('adds chips on Enter/comma, removes with Backspace and x, and sends a string[]', async () => {
+    const capturedBodies = new Map<string, string>()
+    setupFetchMock(
+      [
+        {
+          matcher: (u) => u.includes('/api/v1/models') && !u.includes('/health'),
+          method: 'POST',
+          response: makeChatModel({ id: 'new', name: 'aliased' }),
+        },
+        ...defaultEntries(),
+      ],
+      capturedBodies,
+    )
+    renderModelsPage()
+
+    await openCreateDialog()
+    const dialog = getDialog(/add model/i)
+    const aliasInput = within(dialog).getByRole('textbox', { name: /aliases/i })
+
+    await userEvent.type(aliasInput, 'default{Enter}')
+    await userEvent.type(aliasInput, 'gpt4,latest,')
+    await userEvent.type(aliasInput, 'extra{Enter}')
+    expect(within(dialog).getByRole('button', { name: 'Remove alias default' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Remove alias latest' })).toBeInTheDocument()
+
+    // Backspace on the empty input removes the last chip ("extra")
+    await userEvent.type(aliasInput, '{Backspace}')
+    expect(within(dialog).queryByRole('button', { name: 'Remove alias extra' })).not.toBeInTheDocument()
+
+    // The x button removes a specific chip
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Remove alias gpt4' }))
+    expect(within(dialog).queryByRole('button', { name: 'Remove alias gpt4' })).not.toBeInTheDocument()
+
+    await userEvent.type(within(dialog).getByRole('textbox', { name: /^name$/i }), 'aliased')
+    await userEvent.type(within(dialog).getByRole('textbox', { name: /base url/i }), 'https://api.openai.com/v1')
+    await submitDialog(dialog, /add model/i)
+
+    await waitFor(() => expect(capturedBodies.has('POST:/api/v1/models')).toBe(true))
+    const body = JSON.parse(capturedBodies.get('POST:/api/v1/models')!)
+    expect(body.aliases).toEqual(['default', 'latest'])
+  })
+
+  it('pre-fills existing aliases as chips in the edit sheet and sends the changed list', async () => {
+    const capturedBodies = new Map<string, string>()
+    const model = makeChatModel({ id: 'model-1', name: 'gpt-4o', aliases: ['a1', 'a2'] })
+    setupFetchMock(
+      [
+        ...defaultEntries(MOCK_SERVER_CONFIG_DISABLED, { data: [model], has_more: false }),
+        { matcher: (u) => u.includes('/api/v1/models/model-1'), method: 'PATCH', response: model },
+      ],
+      capturedBodies,
+    )
+    renderModelsPage()
+
+    const nameEl = await screen.findByRole('button', { name: 'gpt-4o' })
+    await userEvent.click(within(nameEl.closest('tr')!).getByRole('button', { name: 'Edit model' }))
+    const dialog = getDialog(/edit model/i)
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Remove alias a1' }))
+    await userEvent.type(within(dialog).getByRole('textbox', { name: /aliases/i }), 'a3{Enter}')
+    await submitDialog(dialog, /save changes/i)
+
+    await waitFor(() => expect(capturedBodies.has('PATCH:/api/v1/models/model-1')).toBe(true))
+    const body = JSON.parse(capturedBodies.get('PATCH:/api/v1/models/model-1')!)
+    expect(body.aliases).toEqual(['a2', 'a3'])
   })
 })
