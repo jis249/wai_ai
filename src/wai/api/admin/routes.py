@@ -19,6 +19,7 @@ from wai.api.admin import (
     model_aliases,
     models,
     oidc,
+    onboarding,
     org_memberships,
     org_sso,
     orgs,
@@ -32,6 +33,8 @@ from wai.api.admin import (
     users,
 )
 from wai.api.admin.handler import auth_middleware, get_handler
+from wai.api.admin import pricing as pricing_admin
+from wai.api.admin import alerts as alerts_admin
 
 API_PREFIX = "/api/v1"
 
@@ -59,9 +62,11 @@ def create_admin_router() -> APIRouter:
     # Authenticated /api/v1 group
     authed = APIRouter(dependencies=[Depends(auth_middleware)])
 
+    authed.add_api_route(f"{API_PREFIX}/auth/logout", auth.logout, methods=["POST"], status_code=204, tags=["auth"])
     authed.add_api_route(f"{API_PREFIX}/me", auth.me, methods=["GET"], tags=["auth"])
     authed.add_api_route(f"{API_PREFIX}/me/available-models", auth.available_models, methods=["GET"], tags=["auth"])
     authed.include_router(dashboard.router, prefix=API_PREFIX)
+    authed.include_router(onboarding.router, prefix=API_PREFIX)
     authed.include_router(system.router, prefix=API_PREFIX)
     authed.include_router(setup.router, prefix=API_PREFIX)
     authed.include_router(usage.router, prefix=API_PREFIX)
@@ -89,6 +94,8 @@ def create_admin_router() -> APIRouter:
     authed.include_router(oidc.router, prefix=API_PREFIX)
     authed.include_router(update.router, prefix=API_PREFIX)
     authed.include_router(mcp_handler.router, prefix=API_PREFIX)
+    authed.include_router(pricing_admin.router, prefix=API_PREFIX)
+    authed.include_router(alerts_admin.router, prefix=API_PREFIX)
 
     if h.code_mode_server is not None:
         mcp_handler.register_code_mode_routes(authed)
@@ -101,4 +108,7 @@ def register_routes(app, handler=None) -> APIRouter:
     """Mount admin routes on a FastAPI app."""
     router = create_admin_router()
     app.include_router(router)
+    from wai.pricing import schedule_auto_sync
+
+    schedule_auto_sync(app, get_handler)  # no-op unless pricing.auto_sync is enabled
     return router

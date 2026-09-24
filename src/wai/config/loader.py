@@ -23,6 +23,7 @@ from wai.config.models import (
     MCPServerConfig,
     ModelConfig,
     PricingConfig,
+    PricingSyncConfig,
     ProxyConfig,
     RedisConfig,
     ServerConfig,
@@ -289,7 +290,61 @@ def _from_dict(data: dict[str, Any]) -> Config:
             format=str(logging_raw.get("format") or ""),
         ),
     )
+    cfg.pricing = _pricing_sync(data.get("pricing") or {})
+    cfg.reliability = _reliability(data.get("reliability") or {})
     _set_defaults(cfg)
+    return cfg
+
+
+def _pricing_sync(raw: dict[str, Any]) -> PricingSyncConfig:
+    """Parse the top-level ``pricing:`` block (model catalog pricing sync)."""
+    defaults = PricingSyncConfig()
+
+    def _num(key: str, default: float) -> float:
+        try:
+            value = float(raw.get(key) if raw.get(key) is not None else default)
+        except (TypeError, ValueError):
+            return default
+        return value if value > 0 else default
+
+    return PricingSyncConfig(
+        source_url=str(raw.get("source_url") or defaults.source_url).strip(),
+        local_path=str(raw.get("local_path") or "").strip(),
+        auto_sync=str(raw.get("auto_sync") or "").strip().lower() in ("1", "true", "yes", "on"),
+        auto_sync_interval_hours=_num("auto_sync_interval_hours", defaults.auto_sync_interval_hours),
+        timeout_seconds=_num("timeout_seconds", defaults.timeout_seconds),
+        max_bytes=int(_num("max_bytes", defaults.max_bytes)),
+    )
+
+
+def _reliability(raw: dict[str, Any]) -> Any:
+    """Parse the top-level ``reliability:`` block; bad or missing values keep defaults."""
+    from dataclasses import fields
+
+    from wai.config.models import ReliabilityConfig
+
+    cfg = ReliabilityConfig()
+    if not isinstance(raw, dict):
+        return cfg
+    for f in fields(cfg):
+        if f.name not in raw or raw[f.name] is None:
+            continue
+        value = raw[f.name]
+        default = getattr(cfg, f.name)
+        try:
+            if isinstance(default, bool):
+                parsed: Any = value if isinstance(value, bool) else (
+                    str(value).strip().lower() in ("1", "true", "yes", "on")
+                )
+            elif isinstance(default, int):
+                parsed = int(value)
+            else:
+                parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(parsed, bool) and parsed < 0:
+            continue
+        setattr(cfg, f.name, parsed)
     return cfg
 
 

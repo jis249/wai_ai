@@ -178,4 +178,5 @@ async def delete_service_account(
         raise not_found("service account not found")
     except Exception:
         raise internal_error("failed to delete service account")
+    await h.refresh_keys(service_account_id=sa_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

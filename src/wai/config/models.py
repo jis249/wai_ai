@@ -166,6 +166,52 @@ class LoggingConfig:
     format: str = ""
 
 
+DEFAULT_PRICING_SOURCE_URL = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+)
+
+
+@dataclass
+class PricingSyncConfig:
+    """Model catalog pricing sync (LiteLLM community price list)."""
+
+    source_url: str = DEFAULT_PRICING_SOURCE_URL
+    # Air-gapped installs: read the JSON from this file instead of fetching source_url.
+    local_path: str = ""
+    # Daily background sync; only touches models whose pricing_source is 'synced'.
+    auto_sync: bool = False
+    auto_sync_interval_hours: float = 24.0
+    timeout_seconds: float = 15.0
+    max_bytes: int = 10 * 1024 * 1024
+
+
+@dataclass
+class ReliabilityConfig:
+    """Proxy reliability: per-deployment circuit breakers and retry backoff."""
+
+    circuit_enabled: bool = True
+    # Open after this many consecutive failures (network error, timeout, 5xx, 429).
+    circuit_failure_threshold: int = 5
+    # Optional: also open when the failure rate over the rolling window reaches this
+    # fraction (0 disables), once at least circuit_min_requests were seen.
+    circuit_failure_rate_threshold: float = 0.0
+    circuit_window_seconds: float = 60.0
+    circuit_min_requests: int = 20
+    # First cooldown; doubles on each re-trip without recovery, capped at the max.
+    circuit_cooldown_seconds: float = 30.0
+    circuit_max_cooldown_seconds: float = 300.0
+    # A 429 with Retry-After opens the circuit immediately for that long (capped).
+    circuit_open_on_retry_after: bool = True
+    circuit_max_entries: int = 2048
+    # Backoff between retry attempts: exponential with jitter.
+    retry_backoff_base_ms: float = 100.0
+    retry_backoff_max_ms: float = 2000.0
+    # Honour an upstream Retry-After up to this many seconds; longer means move on.
+    retry_after_max_seconds: float = 10.0
+    # Total retry budget when the model sets no timeout (else the model timeout).
+    retry_budget_seconds: float = 60.0
+
+
 @dataclass
 class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
@@ -176,3 +222,5 @@ class Config:
     mcp_servers: list[MCPServerConfig] = field(default_factory=list)
     settings: SettingsConfig = field(default_factory=SettingsConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    pricing: PricingSyncConfig = field(default_factory=PricingSyncConfig)
+    reliability: ReliabilityConfig = field(default_factory=ReliabilityConfig)

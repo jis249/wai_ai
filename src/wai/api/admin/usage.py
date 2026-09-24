@@ -405,43 +405,137 @@ class RequestLogItem(BaseModel):
     cost_usd: float = 0
     latency_ms: int = 0
     cache_hit: bool = False
+    error: str = ""
 
 
 class RequestLogsResponse(BaseModel):
     data: list[RequestLogItem] = Field(default_factory=list)
     has_more: bool = False
+    # Cursor for the next (older) page: pass as ?before=...&before_id=...
+    next_before: str = ""
+    next_before_id: str = ""
+    # Newest row in this result (live-tail cursor): pass as ?after=...&after_id=...
+    latest_created_at: str = ""
+    latest_id: str = ""
+
+
+MAX_REQUEST_LOGS_LIMIT = 500
+
+
+def _log_ts(value: str, name: str) -> str:
+    """Normalize an RFC3339 timestamp to the request_logs.created_at text format."""
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise bad_request(f"{name} must be a valid RFC3339 timestamp")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
 @router.get("/usage/request-logs", response_model=RequestLogsResponse)
 async def list_request_logs(
     limit: int = Query(50),
+    before: str = Query(""),
+    before_id: str = Query(""),
+    after: str = Query(""),
+    after_id: str = Query(""),
+    model: str = Query(""),
+    status: str = Query(""),
+    key_id: str = Query(""),
+    from_: str = Query("", alias="from"),
+    to: str = Query(""),
     key_info: KeyInfo = Depends(auth_middleware),
 ) -> RequestLogsResponse:
     h = get_handler()
-    team_id = ""
-    user_id = ""
+    limit = min(max(int(limit), 1), MAX_REQUEST_LOGS_LIMIT)
+    clauses = ["r.org_id = ?"]
+    params: list = [key_info.org_id]
     if not has_role(key_info.role, ROLE_ORG_ADMIN):
         if has_role(key_info.role, ROLE_TEAM_ADMIN):
-            team_id = key_info.team_id
+            clauses.append("k.team_id = ?")
+            params.append(key_info.team_id)
         else:
-            user_id = key_info.user_id
-    rows = await repo.list_request_logs(
-        h.db, key_info.org_id, limit=limit, team_id=team_id, user_id=user_id
+            clauses.append("k.user_id = ?")
+            params.append(key_info.user_id)
+    if model:
+        clauses.append("(r.model_name = ? OR r.requested_model = ?)")
+        params.extend([model, model])
+    if status:
+        s = status.lower().strip()
+        if s == "success":
+            clauses.append("r.status_code >= 200 AND r.status_code < 300")
+        elif s == "error":
+            clauses.append("(r.status_code < 200 OR r.status_code >= 300)")
+        else:
+            raise bad_request("status must be 'success' or 'error'")
+    if key_id:
+        clauses.append("r.key_id = ?")
+        params.append(key_id)
+    if from_:
+        clauses.append("r.created_at >= ?")
+        params.append(_log_ts(from_, "from"))
+    if to:
+        clauses.append("r.created_at < ?")
+        params.append(_log_ts(to, "to"))
+    if before:
+        # created_at is shared by every row of a flush batch, so tie-break on id.
+        before_ts = _log_ts(before, "before")
+        if before_id:
+            clauses.append("(r.created_at < ? OR (r.created_at = ? AND r.id < ?))")
+            params.extend([before_ts, before_ts, before_id])
+        else:
+            clauses.append("r.created_at < ?")
+            params.append(before_ts)
+    if after:
+        # Live tail: strictly newer than the (created_at, id) cursor. ids are uuid7, so
+        # they increase with insert time within a shared created_at second.
+        after_ts = _log_ts(after, "after")
+        if after_id:
+            clauses.append("(r.created_at > ? OR (r.created_at = ? AND r.id > ?))")
+            params.extend([after_ts, after_ts, after_id])
+        else:
+            clauses.append("r.created_at > ?")
+            params.append(after_ts)
+    params.append(limit + 1)
+    fetched = await h.db.fetchall(
+        f"""SELECT r.id, r.created_at, r.status_code, r.model_name, r.requested_model,
+                   r.prompt_tokens, r.completion_tokens, r.cost_usd, r.latency_ms, r.cache_hit,
+                   r.error, k.key_hint
+            FROM request_logs r
+            LEFT JOIN api_keys k ON k.id = r.key_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY r.created_at DESC, r.id DESC
+            LIMIT ?""",
+        tuple(params),
     )
+    rows = [dict(r) for r in fetched]
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    last = rows[-1] if has_more and rows else None
+    newest = rows[0] if rows else None
     return RequestLogsResponse(
+        has_more=has_more,
+        next_before=(last["created_at"] if last else ""),
+        next_before_id=(last["id"] if last else ""),
+        latest_created_at=(newest["created_at"] if newest else ""),
+        latest_id=(newest["id"] if newest else ""),
         data=[
             RequestLogItem(
                 id=r["id"],
                 created_at=r["created_at"],
                 status=int(r.get("status_code") or 0),
-                model=r.get("model_name") or "",
-                routed_model=r.get("requested_model") or "",
+                # model = what the client asked for (e.g. "auto" or an alias);
+                # routed_model = the concrete model that served the request.
+                model=r.get("requested_model") or r.get("model_name") or "",
+                routed_model=r.get("model_name") or "",
                 key_hint=r.get("key_hint") or "",
                 prompt_tokens=int(r.get("prompt_tokens") or 0),
                 completion_tokens=int(r.get("completion_tokens") or 0),
                 cost_usd=float(r.get("cost_usd") or 0),
                 latency_ms=int(r.get("latency_ms") or 0),
                 cache_hit=bool(int(r.get("cache_hit") or 0)),
+                error=r.get("error") or "",
             )
             for r in rows
         ]

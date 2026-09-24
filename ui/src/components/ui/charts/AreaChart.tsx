@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import {
   ResponsiveContainer,
   AreaChart as RechartsAreaChart,
@@ -9,11 +10,12 @@ import {
 } from 'recharts'
 import type { TooltipContentProps } from 'recharts'
 import type { ValueType, NameType } from 'recharts/types/component/DefaultTooltipContent'
-import { useTheme } from '../../../hooks/useTheme'
+import { CHART_CHROME, chartColor } from '../../../lib/chartColors'
 
 export interface AreaChartProps {
   data: { label: string; value: number }[]
   height?: number
+  /** Series color. Any CSS color or `var(--chart-N)`; defaults to the first chart token. */
   color?: string
   showGrid?: boolean
   formatValue?: (n: number) => string
@@ -49,40 +51,21 @@ const GRADIENT_ID_PREFIX = 'area-chart-gradient-'
 export function AreaChart({
   data,
   height = 300,
-  color = '#8b5cf6',
+  color = chartColor(0),
   showGrid = false,
   formatValue,
 }: AreaChartProps) {
-  const { theme } = useTheme()
-  const chartColors =
-    theme === 'light'
-      ? {
-          tick: '#64748b',
-          grid: 'rgba(15, 23, 42, 0.08)',
-          cursor: 'rgba(15, 23, 42, 0.08)',
-          dotStroke: '#ffffff',
-          tooltip: {
-            bg: '#ffffff',
-            border: 'rgba(15, 23, 42, 0.12)',
-            label: '#64748b',
-            value: '#0f172a',
-          },
-        }
-      : {
-          tick: '#8494a8',
-          grid: 'rgba(255, 255, 255, 0.05)',
-          cursor: 'rgba(255, 255, 255, 0.08)',
-          dotStroke: '#1a1a24',
-          tooltip: {
-            bg: '#1a1a24',
-            border: 'rgba(255, 255, 255, 0.1)',
-            label: '#8494a8',
-            value: '#e2e8f0',
-          },
-        }
+  const instanceId = useId()
+  const chartColors = {
+    tick: CHART_CHROME.tick,
+    grid: CHART_CHROME.grid,
+    cursor: CHART_CHROME.cursor,
+    dotStroke: CHART_CHROME.surface,
+    tooltip: CHART_CHROME.tooltip,
+  }
 
-  // Derive a stable ID from color so multiple charts on the same page can coexist
-  const gradientId = `${GRADIENT_ID_PREFIX}${color.replace(/[^a-z0-9]/gi, '')}`
+  // Unique per instance so multiple charts on the same page can coexist
+  const gradientId = `${GRADIENT_ID_PREFIX}${instanceId.replace(/[^a-z0-9]/gi, '')}`
 
   const chartData = data.map((d) => ({ label: d.label, value: d.value }))
 

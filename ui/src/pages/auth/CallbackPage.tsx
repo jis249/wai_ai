@@ -17,9 +17,9 @@ export default function CallbackPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-bg-primary">
-      <div className="text-center">
-        <div className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent mb-4" />
-        <p className="text-sm text-text-tertiary">Authenticating...</p>
+      <div className="text-center" role="status" aria-live="polite">
+        <div aria-hidden="true" className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent mb-4" />
+        <p className="text-sm text-text-tertiary">Completing single sign-on...</p>
       </div>
     </div>
   )

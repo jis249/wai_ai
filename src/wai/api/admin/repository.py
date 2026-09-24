@@ -345,7 +345,10 @@ async def resolve_user_role(db: Database, user_id: str) -> tuple[str, str]:
     row = await db.fetchone(
         """SELECT u.is_system_admin, om.role, om.org_id
            FROM users u
-           LEFT JOIN org_memberships om ON om.user_id = u.id
+           LEFT JOIN (
+               org_memberships om
+               JOIN organizations o ON o.id = om.org_id AND o.deleted_at IS NULL
+           ) ON om.user_id = u.id
            WHERE u.id = ? AND u.deleted_at IS NULL
            ORDER BY om.created_at LIMIT 1""",
         (user_id,),
@@ -354,7 +357,10 @@ async def resolve_user_role(db: Database, user_id: str) -> tuple[str, str]:
         raise NotFoundError(user_id)
     if row["is_system_admin"]:
         org_row = await db.fetchone(
-            "SELECT org_id FROM org_memberships WHERE user_id = ? LIMIT 1", (user_id,)
+            """SELECT om.org_id FROM org_memberships om
+               JOIN organizations o ON o.id = om.org_id AND o.deleted_at IS NULL
+               WHERE om.user_id = ? ORDER BY om.created_at LIMIT 1""",
+            (user_id,),
         )
         org_id = org_row["org_id"] if org_row else ""
         return "system_admin", org_id
@@ -722,15 +728,16 @@ async def create_api_key(db: Database, params: dict[str, Any]) -> dict[str, Any]
     await db.execute(
         """INSERT INTO api_keys (id, key_hash, key_hint, key_type, name, org_id, team_id, user_id,
                                  service_account_id, daily_token_limit, monthly_token_limit,
-                                 requests_per_minute, requests_per_day, expires_at, created_by,
-                                 created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
+                                 requests_per_minute, requests_per_day, monthly_spend_limit,
+                                 expires_at, created_by, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
         (
             kid, params["key_hash"], params["key_hint"], params["key_type"], params["name"],
             params["org_id"], params.get("team_id"), params.get("user_id"),
             params.get("service_account_id"), params.get("daily_token_limit", 0),
             params.get("monthly_token_limit", 0), params.get("requests_per_minute", 0),
-            params.get("requests_per_day", 0), params.get("expires_at"), params["created_by"],
+            params.get("requests_per_day", 0), float(params.get("monthly_spend_limit") or 0),
+            params.get("expires_at"), params["created_by"],
         ),
     )
     await db.commit()
@@ -743,7 +750,8 @@ async def get_api_key(db: Database, key_id: str) -> dict[str, Any] | None:
     row = await db.fetchone(
         """SELECT id, key_hash, key_hint, key_type, name, org_id, team_id, user_id, service_account_id,
                   daily_token_limit, monthly_token_limit, requests_per_minute, requests_per_day,
-                  expires_at, last_used_at, created_by, created_at, updated_at, deleted_at
+                  monthly_spend_limit, expires_at, last_used_at, created_by, created_at, updated_at,
+                  deleted_at
            FROM api_keys WHERE id = ? AND deleted_at IS NULL""",
         (key_id,),
     )
@@ -763,7 +771,7 @@ async def list_api_keys(
     rows = await db.fetchall(
         f"""SELECT id, key_hint, key_type, name, org_id, team_id, user_id, service_account_id,
                    daily_token_limit, monthly_token_limit, requests_per_minute, requests_per_day,
-                   expires_at, last_used_at, created_by, created_at, updated_at
+                   monthly_spend_limit, expires_at, last_used_at, created_by, created_at, updated_at
             FROM api_keys WHERE org_id = ? {deleted_clause} {cursor_clause}
             ORDER BY id LIMIT ?""",
         tuple(params),
@@ -860,9 +868,7 @@ async def redeem_invite_token(db: Database, invite_id: str) -> None:
         raise NotFoundError(invite_id)
 
 
-async def load_all_active_keys(db: Database) -> list[dict[str, Any]]:
-    rows = await db.fetchall(
-        """SELECT k.id, k.key_hash, k.key_type, k.name, k.org_id, k.team_id, k.user_id, k.service_account_id,
+_ACTIVE_KEYS_SQL = """SELECT k.id, k.key_hash, k.key_type, k.name, k.org_id, k.team_id, k.user_id, k.service_account_id,
                   k.daily_token_limit, k.monthly_token_limit, k.requests_per_minute, k.requests_per_day,
                   k.expires_at, k.monthly_spend_limit,
                   o.daily_token_limit AS org_daily_token_limit,
@@ -882,10 +888,52 @@ async def load_all_active_keys(db: Database) -> list[dict[str, Any]]:
            JOIN organizations o ON o.id = k.org_id
            LEFT JOIN teams t ON t.id = k.team_id
            LEFT JOIN users u ON u.id = k.user_id
+           LEFT JOIN service_accounts sa ON sa.id = k.service_account_id
            LEFT JOIN org_memberships om ON om.user_id = k.user_id AND om.org_id = k.org_id
-           WHERE k.deleted_at IS NULL"""
-    )
+           WHERE k.deleted_at IS NULL
+             AND o.deleted_at IS NULL
+             AND (k.team_id IS NULL OR t.deleted_at IS NULL)
+             AND (k.user_id IS NULL OR u.deleted_at IS NULL)
+             AND (k.service_account_id IS NULL OR sa.deleted_at IS NULL)
+             AND (k.key_type NOT IN ('user_key', 'session_key')
+                  OR om.role IS NOT NULL OR COALESCE(u.is_system_admin, 0) <> 0)"""
+
+
+async def load_active_keys(
+    db: Database,
+    *,
+    key_id: str | None = None,
+    user_id: str | None = None,
+    team_id: str | None = None,
+    org_id: str | None = None,
+    service_account_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Load usable keys with their org/team limits. Filters combine with AND.
+
+    Keys whose org, team, user or service account is soft-deleted are excluded, as are
+    user/session keys whose owner is no longer a member of the key's org (system admins exempt).
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    for col, val in (
+        ("k.id", key_id),
+        ("k.user_id", user_id),
+        ("k.team_id", team_id),
+        ("k.org_id", org_id),
+        ("k.service_account_id", service_account_id),
+    ):
+        if val is not None:
+            clauses.append(f"{col} = ?")
+            params.append(val)
+    sql = _ACTIVE_KEYS_SQL
+    if clauses:
+        sql += " AND " + " AND ".join(clauses)
+    rows = await db.fetchall(sql, tuple(params))
     return [dict(r) for r in rows]
+
+
+async def load_all_active_keys(db: Database) -> list[dict[str, Any]]:
+    return await load_active_keys(db)
 
 
 async def get_setting(db: Database, key: str) -> str | None:
@@ -1249,3 +1297,159 @@ async def enrich_audit_log_actors(db: Database, events: list[dict[str, Any]]) ->
             event["actor_email"] = user["email"]
             event["actor_display_name"] = user["display_name"] or user["email"]
     return events
+
+
+# --- Privilege-escalation guard helpers (users / org memberships) ---
+
+
+async def get_user_password_hash_by_id(db: Database, user_id: str) -> str | None:
+    """Password hash for a live user, or None (no user / SSO-only account)."""
+    row = await db.fetchone(
+        "SELECT password_hash FROM users WHERE id = ? AND deleted_at IS NULL", (user_id,)
+    )
+    if not row:
+        return None
+    return row["password_hash"] or None
+
+
+async def list_user_org_roles(db: Database, user_id: str) -> dict[str, str]:
+    """Map of org_id -> role for every org membership of the user."""
+    rows = await db.fetchall(
+        "SELECT org_id, role FROM org_memberships WHERE user_id = ?", (user_id,)
+    )
+    return {r["org_id"]: r["role"] for r in rows}
+
+
+async def count_org_admins(db: Database, org_id: str) -> int:
+    row = await db.fetchone(
+        """SELECT COUNT(*) AS c FROM org_memberships om
+           JOIN users u ON u.id = om.user_id AND u.deleted_at IS NULL
+           WHERE om.org_id = ? AND om.role = 'org_admin'""",
+        (org_id,),
+    )
+    return int(row["c"]) if row else 0
+
+
+# --- Dashboard KPIs (request_logs) -------------------------------------------------------
+#
+# request_logs.created_at is TEXT in '%Y-%m-%dT%H:%M:%S+00:00' (UTC) form, so window bounds
+# are compared as text in that same format and buckets are text prefixes of it
+# (13 chars = 'YYYY-MM-DDTHH', 10 chars = 'YYYY-MM-DD'). This keeps the range predicate
+# sargable on idx_request_logs_org_created / idx_request_logs_created_at.
+
+KPI_BUCKET_PREFIX_LEN = {"hour": 13, "day": 10}
+
+_KPI_ERROR_PRED = "r.status_code < 200 OR r.status_code >= 300"
+
+
+def postgres_percentile(fraction: float) -> str:
+    """Continuous percentile of latency_ms (PostgreSQL ordered-set aggregate)."""
+    return f"percentile_cont({fraction}) WITHIN GROUP (ORDER BY r.latency_ms)"
+
+
+def request_log_scope_sql(
+    org_id: str, team_id: str, user_id: str
+) -> tuple[str, list[str], list[Any]]:
+    """JOIN + WHERE fragments restricting request_logs to a dashboard scope.
+
+    Empty ``org_id`` means all orgs (system admin). team/user scope goes through the
+    owning API key, mirroring /usage/request-logs.
+    """
+    join = ""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if org_id:
+        clauses.append("r.org_id = ?")
+        params.append(org_id)
+    if team_id or user_id:
+        join = " JOIN api_keys k ON k.id = r.key_id"
+    if team_id:
+        clauses.append("k.team_id = ?")
+        params.append(team_id)
+    if user_id:
+        clauses.append("k.user_id = ?")
+        params.append(user_id)
+    return join, clauses, params
+
+
+def build_kpi_totals_sql(
+    org_id: str, team_id: str, user_id: str, from_ts: str, to_ts: str,
+    *, percentile=postgres_percentile,
+) -> tuple[str, tuple[Any, ...]]:
+    join, scope, scope_params = request_log_scope_sql(org_id, team_id, user_id)
+    where = " AND ".join(["r.created_at >= ?", "r.created_at < ?", *scope])
+    sql = (
+        "SELECT COUNT(*) AS requests,"
+        f" COALESCE(SUM(CASE WHEN {_KPI_ERROR_PRED} THEN 1 ELSE 0 END), 0) AS errors,"
+        " COALESCE(SUM(r.prompt_tokens + r.completion_tokens), 0) AS tokens,"
+        " COALESCE(SUM(r.cost_usd), 0) AS cost_usd,"
+        " COALESCE(SUM(CASE WHEN r.cache_hit <> 0 THEN 1 ELSE 0 END), 0) AS cache_hits,"
+        f" {percentile(0.5)} AS latency_p50_ms,"
+        f" {percentile(0.95)} AS latency_p95_ms"
+        f" FROM request_logs r{join}"
+        f" WHERE {where}"
+    )
+    return sql, (from_ts, to_ts, *scope_params)
+
+
+def build_kpi_series_sql(
+    org_id: str, team_id: str, user_id: str, from_ts: str, to_ts: str, granularity: str,
+    *, percentile=postgres_percentile,
+) -> tuple[str, tuple[Any, ...]]:
+    n = KPI_BUCKET_PREFIX_LEN[granularity]
+    bucket = f"SUBSTR(r.created_at, 1, {n})"
+    join, scope, scope_params = request_log_scope_sql(org_id, team_id, user_id)
+    where = " AND ".join(["r.created_at >= ?", "r.created_at < ?", *scope])
+    sql = (
+        f"SELECT {bucket} AS bucket,"
+        " COUNT(*) AS requests,"
+        f" COALESCE(SUM(CASE WHEN {_KPI_ERROR_PRED} THEN 1 ELSE 0 END), 0) AS errors,"
+        " COALESCE(SUM(r.prompt_tokens + r.completion_tokens), 0) AS tokens,"
+        " COALESCE(SUM(r.cost_usd), 0) AS cost_usd,"
+        f" {percentile(0.95)} AS latency_p95_ms"
+        f" FROM request_logs r{join}"
+        f" WHERE {where}"
+        f" GROUP BY {bucket}"
+        f" ORDER BY {bucket}"
+    )
+    return sql, (from_ts, to_ts, *scope_params)
+
+
+async def get_request_log_kpi_totals(
+    db: Database, org_id: str, team_id: str, user_id: str, from_ts: str, to_ts: str,
+) -> dict[str, Any]:
+    sql, params = build_kpi_totals_sql(org_id, team_id, user_id, from_ts, to_ts)
+    row = await db.fetchone(sql, params)
+    return dict(row) if row else {}
+
+
+async def get_request_log_kpi_series(
+    db: Database, org_id: str, team_id: str, user_id: str, from_ts: str, to_ts: str,
+    granularity: str,
+) -> list[dict[str, Any]]:
+    sql, params = build_kpi_series_sql(org_id, team_id, user_id, from_ts, to_ts, granularity)
+    rows = await db.fetchall(sql, params)
+    return [dict(r) for r in rows]
+
+
+# --- Onboarding status ---------------------------------------------------------------------
+
+ONBOARDING_STATUS_SQL = """SELECT
+    EXISTS (SELECT 1 FROM models WHERE deleted_at IS NULL AND is_active = 1) AS has_models,
+    EXISTS (SELECT 1 FROM api_keys WHERE org_id = ? AND deleted_at IS NULL) AS has_keys,
+    EXISTS (SELECT 1 FROM request_logs WHERE org_id = ?) AS has_requests,
+    (EXISTS (SELECT 1 FROM organizations WHERE id = ? AND monthly_spend_limit > 0)
+     OR EXISTS (SELECT 1 FROM teams
+                WHERE org_id = ? AND deleted_at IS NULL AND monthly_spend_limit > 0)
+     OR EXISTS (SELECT 1 FROM api_keys
+                WHERE org_id = ? AND deleted_at IS NULL AND monthly_spend_limit > 0)
+    ) AS has_budget,
+    (SELECT COUNT(*) FROM (SELECT 1 FROM org_memberships WHERE org_id = ? LIMIT 2) m) > 1
+        AS has_members"""
+
+
+async def get_onboarding_status(db: Database, org_id: str) -> dict[str, bool]:
+    row = await db.fetchone(ONBOARDING_STATUS_SQL, (org_id,) * 6)
+    row = dict(row) if row else {}
+    keys = ("has_models", "has_keys", "has_requests", "has_budget", "has_members")
+    return {k: bool(row.get(k)) for k in keys}

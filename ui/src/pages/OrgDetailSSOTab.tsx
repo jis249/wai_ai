@@ -7,6 +7,9 @@ import { Toggle } from '../components/ui/Toggle'
 import { Select } from '../components/ui/Select'
 import { Badge } from '../components/ui/Badge'
 import { ConfirmDialog } from '../components/ui/Dialog'
+import { Card } from '../components/ui/Card'
+import { Tooltip } from '../components/ui/Tooltip'
+import { SkeletonText } from '../components/ui/Skeleton'
 import { useMe } from '../hooks/useMe'
 import { useToast } from '../hooks/useToast'
 import {
@@ -242,7 +245,13 @@ function TestConnectionBadge({ status, message }: TestConnectionBadgeProps) {
   if (status === 'success') {
     return <Badge variant="success">Discovery OK</Badge>
   }
-  return <Badge variant="error" title={message}>{message ? 'Failed' : 'Error'}</Badge>
+  return (
+    <Tooltip content={message}>
+      <span tabIndex={0} className="inline-flex">
+        <Badge variant="error">Failed</Badge>
+      </span>
+    </Tooltip>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +365,7 @@ function SSOForm({ orgId, initial, hasExistingConfig, onDelete }: SSOFormProps) 
     <>
       <form onSubmit={handleSubmit} noValidate className="space-y-6">
         {/* Card 1: Status */}
-        <div className="bg-bg-secondary rounded-xl border border-border p-6">
+        <Card>
           <h3 className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary mb-4">
             Status
           </h3>
@@ -373,22 +382,23 @@ function SSOForm({ orgId, initial, hasExistingConfig, onDelete }: SSOFormProps) 
               disabled={isPending}
             />
           </div>
-        </div>
+        </Card>
 
         {/* Card 2: Provider Configuration */}
-        <div className="bg-bg-secondary rounded-xl border border-border p-6 space-y-4">
+        <Card className="space-y-4">
           <h3 className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary mb-4">
             Provider Configuration
           </h3>
 
           {/* Issuer URL + Test */}
           <div className="space-y-1.5">
-            <label className="block text-sm font-medium text-text-secondary">
+            <label htmlFor="sso-issuer" className="block text-sm font-medium text-text-secondary">
               Issuer URL
             </label>
-            <div className="flex gap-2 items-start">
-              <div className="flex-1">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+              <div className="min-w-0 flex-1">
                 <input
+                  id="sso-issuer"
                   type="url"
                   value={form.issuer}
                   onChange={patchInput('issuer')}
@@ -482,10 +492,10 @@ function SSOForm({ orgId, initial, hasExistingConfig, onDelete }: SSOFormProps) 
             description="Comma-separated. Leave blank to allow all domains."
             disabled={isPending}
           />
-        </div>
+        </Card>
 
         {/* Card 3: Provisioning */}
-        <div className="bg-bg-secondary rounded-xl border border-border p-6 space-y-4">
+        <Card className="space-y-4">
           <h3 className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary mb-4">
             Provisioning
           </h3>
@@ -511,10 +521,10 @@ function SSOForm({ orgId, initial, hasExistingConfig, onDelete }: SSOFormProps) 
             onChange={patch('defaultRole')}
             disabled={isPending}
           />
-        </div>
+        </Card>
 
         {/* Card 4: Group Sync */}
-        <div className="bg-bg-secondary rounded-xl border border-border p-6 space-y-4">
+        <Card className="space-y-4">
           <h3 className="text-[10px] font-medium tracking-widest uppercase text-text-tertiary mb-4">
             Group Sync
           </h3>
@@ -544,10 +554,10 @@ function SSOForm({ orgId, initial, hasExistingConfig, onDelete }: SSOFormProps) 
               className="font-mono"
             />
           )}
-        </div>
+        </Card>
 
         {/* Actions */}
-        <div className="flex items-center justify-between pt-2">
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
           {hasExistingConfig ? (
             <Button
               type="button"
@@ -605,7 +615,7 @@ export default function OrgDetailSSOTab() {
   return (
     <div className="max-w-3xl space-y-6">
       <div className="rounded-xl border border-border bg-bg-secondary">
-        <div className="px-6 py-4 border-b border-border flex items-center justify-between">
+        <div className="px-6 py-4 border-b border-border flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 className="text-sm font-semibold text-text-primary">
               SSO Configuration
@@ -625,14 +635,7 @@ export default function OrgDetailSSOTab() {
 
         <div className="p-6">
           {/* Loading skeleton */}
-          {orgSSO.isLoading && (
-            <div className="space-y-4 animate-pulse">
-              <div className="h-4 w-48 rounded bg-bg-tertiary" />
-              <div className="h-9 w-full rounded bg-bg-tertiary" />
-              <div className="h-9 w-full rounded bg-bg-tertiary" />
-              <div className="h-9 w-full rounded bg-bg-tertiary" />
-            </div>
-          )}
+          {orgSSO.isLoading && <SkeletonText lines={4} />}
 
           {/* No org config, not in edit mode */}
           {!orgSSO.isLoading && !showEdit && (
@@ -645,13 +648,7 @@ export default function OrgDetailSSOTab() {
               />
 
               {/* Global config display */}
-              {globalSSO.isLoading && (
-                <div className="space-y-3 animate-pulse">
-                  <div className="h-3 w-32 rounded bg-bg-tertiary" />
-                  <div className="h-4 w-full rounded bg-bg-tertiary" />
-                  <div className="h-4 w-3/4 rounded bg-bg-tertiary" />
-                </div>
-              )}
+              {globalSSO.isLoading && <SkeletonText lines={3} />}
 
               {!globalSSO.isLoading && globalSSO.data && (
                 <div>

@@ -11,6 +11,36 @@ _CC_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
 _SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 
 
+def luhn_valid(digits: str) -> bool:
+    """Luhn (mod 10) checksum over a string of digits."""
+    if not digits.isdigit():
+        return False
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = int(ch)
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
+def _contains_card_number(text: str) -> bool:
+    """True when text has a 13-19 digit run (spaces/dashes allowed) passing Luhn."""
+    for match in _CC_RE.finditer(text):
+        groups = [g for g in re.split(r"[ -]+", match.group(0)) if g]
+        # The regex is greedy, so also try dropping trailing digit groups
+        # (e.g. "4111 1111 1111 1111 12" still contains a card number).
+        for end in range(len(groups), 0, -1):
+            digits = "".join(groups[:end])
+            if len(digits) < 13:
+                break
+            if len(digits) <= 19 and len(set(digits)) > 1 and luhn_valid(digits):
+                return True
+    return False
+
+
 def _collect_text(envelope: dict[str, Any]) -> str:
     parts: list[str] = []
     prompt = envelope.get("prompt")
@@ -53,5 +83,5 @@ def apply_org_guardrails(envelope: dict[str, Any], *, pii_enabled: bool, tool_de
     if not pii_enabled:
         return
     text = _collect_text(envelope)
-    if _SSN_RE.search(text) or _CC_RE.search(text):
+    if _SSN_RE.search(text) or _contains_card_number(text):
         raise api_error(400, "guardrail_blocked", "request blocked by PII policy")

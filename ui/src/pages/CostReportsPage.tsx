@@ -1,15 +1,27 @@
-﻿import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { PageHeader } from '../components/ui/PageHeader'
 import { StatCard } from '../components/ui/StatCard'
 import { Table } from '../components/ui/Table'
 import type { Column } from '../components/ui/Table'
-import { Button } from '../components/ui/Button'
+import { ErrorState } from '../components/ui/ErrorState'
+import { EmptyState } from '../components/ui/EmptyState'
+import { SegmentedControl } from '../components/ui/SegmentedControl'
+import { TimeRangePicker } from '../components/ui/TimeRangePicker'
+import { Cpu, DollarSign, Info, Receipt, TrendingDown } from '../components/ui/icons'
+import { Toggle } from '../components/ui/Toggle'
+import { TimeSeriesChart } from '../components/ui/charts/TimeSeriesChart'
+import { ChartSection } from '../components/analytics/ChartSection'
+import { ExportButtons } from '../components/analytics/ExportButtons'
+import { SpendBudgetCard } from '../components/analytics/SpendBudgetCard'
+import { StatCardSkeletons } from '../components/analytics/StatCardSkeletons'
+import { buildCompareSeries } from '../components/analytics/compareSeries'
+import { previousWindow } from '../components/analytics/timeSeries'
 import { useMe } from '../hooks/useMe'
 import { useUsage, useMyUsage } from '../hooks/useUsage'
 import type { UsageDataPoint } from '../hooks/useUsage'
 import { formatNumber, formatReportCost, type CostCurrency } from '../lib/utils'
-import { COST_CURRENCY_STORAGE_KEY } from '../lib/constants'
-import { exportData } from '../lib/export'
+import { COST_CURRENCY_STORAGE_KEY, USD_TO_INR_RATE } from '../lib/constants'
+import { COST_TIME_RANGE_PRESETS, useTimeRange, type TimeRangeValue } from '../lib/timeRange'
 
 const COST_MODEL_HEADERS = [
   { key: 'group_key', label: 'Model' },
@@ -19,27 +31,10 @@ const COST_MODEL_HEADERS = [
   { key: 'avg_cost_per_request', label: 'Avg Cost / Request' },
 ]
 
-const TIME_RANGES = ['7d', '30d', '90d'] as const
-type TimeRange = (typeof TIME_RANGES)[number]
-
-const COST_CURRENCIES = ['USD', 'INR'] as const
-
-const CURRENCY_LABELS: Record<CostCurrency, string> = {
-  USD: '$ USD',
-  INR: '₹ INR',
-}
-
-const RANGE_LABELS: Record<TimeRange, string> = {
-  '7d': 'Last 7 days',
-  '30d': 'Last 30 days',
-  '90d': 'Last 90 days',
-}
-
-const RANGE_DAYS: Record<TimeRange, number> = {
-  '7d': 7,
-  '30d': 30,
-  '90d': 90,
-}
+const CURRENCY_OPTIONS: { value: CostCurrency; label: string; ariaLabel: string }[] = [
+  { value: 'USD', label: '$ USD', ariaLabel: 'US dollars' },
+  { value: 'INR', label: '₹ INR (approx.)', ariaLabel: `Indian rupees, approximate at a fixed ${USD_TO_INR_RATE} INR per USD` },
+]
 
 const DEFAULT_AZURE_PRICING = {
   inputPer1M: 1.75,
@@ -74,61 +69,6 @@ function costForDailyUsage(usage: UsageDataPoint): number {
 function readStoredCurrency(): CostCurrency {
   const stored = localStorage.getItem(COST_CURRENCY_STORAGE_KEY)
   return stored === 'INR' ? 'INR' : 'USD'
-}
-
-function getTimeRange(range: TimeRange): { from: string; to: string } {
-  const now = new Date()
-  const from = new Date(now.getTime() - RANGE_DAYS[range] * 86_400_000)
-  return { from: from.toISOString(), to: now.toISOString() }
-}
-
-// ---------------------------------------------------------------------------
-// Icons
-// ---------------------------------------------------------------------------
-
-function IconDollar() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <line x1="12" y1="1" x2="12" y2="23" />
-      <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-    </svg>
-  )
-}
-
-function IconTrendingDown() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <polyline points="23 18 13.5 8.5 8.5 13.5 1 6" />
-      <polyline points="17 18 23 18 23 12" />
-    </svg>
-  )
-}
-
-function IconCpu() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
-      <rect x="9" y="9" width="6" height="6" />
-      <line x1="9" y1="1" x2="9" y2="4" />
-      <line x1="15" y1="1" x2="15" y2="4" />
-      <line x1="9" y1="20" x2="9" y2="23" />
-      <line x1="15" y1="20" x2="15" y2="23" />
-      <line x1="20" y1="9" x2="23" y2="9" />
-      <line x1="20" y1="14" x2="23" y2="14" />
-      <line x1="1" y1="9" x2="4" y2="9" />
-      <line x1="1" y1="14" x2="4" y2="14" />
-    </svg>
-  )
-}
-
-function IconDownload() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <polyline points="7 10 12 15 17 10" />
-      <line x1="12" y1="15" x2="12" y2="3" />
-    </svg>
-  )
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +178,7 @@ const dayColumns = (formatCost: (amountUsd: number) => string): Column<DayCostRo
     align: 'right',
     render: (row) => {
       if (row.change_pct === null) {
-        return <span className="text-text-tertiary">â€”</span>
+        return <span className="text-text-tertiary">—</span>
       }
       const isPositive = row.change_pct > 0
       const isNeutral = row.change_pct === 0
@@ -247,10 +187,13 @@ const dayColumns = (formatCost: (amountUsd: number) => string): Column<DayCostRo
         : isPositive
           ? 'text-error'
           : 'text-success'
-      const arrow = isNeutral ? '' : isPositive ? 'â–² ' : 'â–¼ '
+      const arrow = isNeutral ? '' : isPositive ? '▲ ' : '▼ '
+      const direction = isNeutral ? 'No change' : isPositive ? 'Up' : 'Down'
       return (
         <span className={colorClass}>
-          {arrow}{Math.abs(row.change_pct).toFixed(1)}%
+          <span aria-hidden="true">{arrow}</span>
+          <span className="sr-only">{direction} </span>
+          {Math.abs(row.change_pct).toFixed(1)}%
         </span>
       )
     },
@@ -262,26 +205,50 @@ const dayColumns = (formatCost: (amountUsd: number) => string): Column<DayCostRo
 // ---------------------------------------------------------------------------
 
 export default function CostReportsPage({ hideHeader = false }: { hideHeader?: boolean }) {
-  const [range, setRange] = useState<TimeRange>('30d')
+  const [range, setRange] = useState<TimeRangeValue>('30d')
   const [currency, setCurrency] = useState<CostCurrency>(readStoredCurrency)
+  const [compare, setCompare] = useState(false)
   const { data: me } = useMe()
   const orgId = me?.org_id ?? ''
   const canViewOrgUsage = me?.is_system_admin === true || me?.role === 'org_admin'
 
-  const { from, to } = useMemo(() => getTimeRange(range), [range])
+  const { from, to, hours, preset } = useTimeRange(range)
 
   const orgModelUsage = useUsage(orgId, from, to, 'model', !!me && canViewOrgUsage)
   const myModelUsage = useMyUsage(from, to, 'model', !!me && !canViewOrgUsage)
   const orgDayUsage = useUsage(orgId, from, to, 'day', !!me && canViewOrgUsage)
   const myDayUsage = useMyUsage(from, to, 'day', !!me && !canViewOrgUsage)
-  const { data: modelUsage, isLoading: modelLoading } = canViewOrgUsage ? orgModelUsage : myModelUsage
-  const { data: dayUsage, isLoading: dayLoading } = canViewOrgUsage ? orgDayUsage : myDayUsage
+  const modelQuery = canViewOrgUsage ? orgModelUsage : myModelUsage
+  const dayQuery = canViewOrgUsage ? orgDayUsage : myDayUsage
+  const { data: modelUsage, isLoading: modelLoading } = modelQuery
+  const { data: dayUsage, isLoading: dayLoading } = dayQuery
+
+  // Previous window (same length, just before `from`) for the dashed comparison series.
+  const prev = useMemo(() => previousWindow(from, to), [from, to])
+  const orgPrevDay = useUsage(orgId, prev.from, prev.to, 'day', !!me && canViewOrgUsage && compare)
+  const myPrevDay = useMyUsage(prev.from, prev.to, 'day', !!me && !canViewOrgUsage && compare)
+  const prevDayData = (canViewOrgUsage ? orgPrevDay : myPrevDay).data?.data
+
+  const dayPoints = useMemo(
+    () =>
+      buildCompareSeries({
+        from,
+        to,
+        granularity: 'day',
+        current: (dayUsage?.data ?? []).map((d) => ({ key: d.group_key, value: costForDailyUsage(d) })),
+        previous:
+          compare && prevDayData != null
+            ? prevDayData.map((d) => ({ key: d.group_key, value: costForDailyUsage(d) }))
+            : null,
+      }),
+    [from, to, dayUsage, compare, prevDayData],
+  )
 
   // Compute totals and model rows
   const { totalCost, modelRows, avgCostPerDay, topModel } = useMemo(() => {
     const data = modelUsage?.data ?? []
     const total = data.reduce((acc, d) => acc + costForModelUsage(d), 0)
-    const days = RANGE_DAYS[range]
+    const days = hours / 24
     const avg = days > 0 ? total / days : 0
     const sorted = [...data].sort((a, b) => costForModelUsage(b) - costForModelUsage(a))
     const rows: ModelCostRow[] = sorted.map((d) => {
@@ -294,9 +261,9 @@ export default function CostReportsPage({ hideHeader = false }: { hideHeader?: b
           d.total_requests > 0 ? cost / d.total_requests : 0,
       }
     })
-    const top = sorted[0]?.group_key ?? 'â€”'
+    const top = sorted[0]?.group_key ?? '—'
     return { totalCost: total, modelRows: rows, avgCostPerDay: avg, topModel: top }
-  }, [modelUsage, range])
+  }, [modelUsage, hours])
 
   // Compute day rows with change vs prior day
   const dayRows: DayCostRow[] = useMemo(() => {
@@ -357,121 +324,148 @@ export default function CostReportsPage({ hideHeader = false }: { hideHeader?: b
   const isModelLoading = modelLoading && !!me && (canViewOrgUsage ? !!orgId : true)
   const isDayLoading = dayLoading && !!me && (canViewOrgUsage ? !!orgId : true)
 
+  const rangeSlug = preset ?? 'custom'
+  const noCost = (description: string) => (
+    <EmptyState icon={<Receipt className="w-6 h-6" />} title="No cost data" description={description} className="py-8" />
+  )
+
   return (
-    <>
+    <div className="min-w-0">
       {!hideHeader && (
-      <PageHeader
-        title="Cost Reports"
-        description="Cloud-model cost estimates. Local/Ollama traffic is usually $0 — use token budgets on the dashboard as the primary cap."
-      />
+        <PageHeader
+          title="Cost Reports"
+          description="Cloud-model cost estimates. Local/Ollama traffic is usually $0 — use token budgets on the dashboard as the primary cap."
+        />
       )}
 
-      {/* Time range pills + export */}
-      <div className="flex items-center gap-3 mb-6">
-        {/* Segmented pill container */}
-        <div className="flex items-center gap-1 p-1 rounded-lg bg-bg-tertiary">
-          {TIME_RANGES.map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRange(r)}
-              className={[
-                'px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
-                range === r
-                  ? 'bg-bg-secondary text-text-primary shadow-sm'
-                  : 'text-text-tertiary hover:text-text-secondary',
-              ].join(' ')}
-            >
-              {RANGE_LABELS[r]}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-1 p-1 rounded-lg bg-bg-tertiary">
-          {COST_CURRENCIES.map((c) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => handleCurrencyChange(c)}
-              className={[
-                'px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
-                currency === c
-                  ? 'bg-bg-secondary text-text-primary shadow-sm'
-                  : 'text-text-tertiary hover:text-text-secondary',
-              ].join(' ')}
-            >
-              {CURRENCY_LABELS[c]}
-            </button>
-          ))}
-        </div>
-
-        <div className="sm:ml-auto flex gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<IconDownload />}
-            onClick={() => exportData(exportRows as unknown as Record<string, unknown>[], exportHeaders, `wai-cost-by-model-${range}`, 'csv')}
-            disabled={modelRows.length === 0}
-          >
-            CSV
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<IconDownload />}
-            onClick={() => exportData(exportRows as unknown as Record<string, unknown>[], exportHeaders, `wai-cost-by-model-${range}`, 'json')}
-            disabled={modelRows.length === 0}
-          >
-            JSON
-          </Button>
+      {/* Time range + currency + export */}
+      <div className="flex flex-wrap items-center gap-3 mb-3">
+        <TimeRangePicker value={range} onChange={setRange} presets={COST_TIME_RANGE_PRESETS} labelStyle="medium" />
+        <SegmentedControl<CostCurrency>
+          aria-label="Currency"
+          options={CURRENCY_OPTIONS}
+          value={currency}
+          onChange={handleCurrencyChange}
+        />
+        <div className="sm:ml-auto">
+          <ExportButtons
+            data={exportRows}
+            headers={exportHeaders}
+            filenamePrefix={`wai-cost-by-model-${rangeSlug}`}
+            subject="cost by model"
+          />
         </div>
       </div>
+      <p className="mb-6 flex items-start gap-1.5 text-xs text-text-tertiary">
+        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span>
+          Costs are recorded in USD. INR amounts are approximate, converted at a fixed rate of {USD_TO_INR_RATE} INR per
+          1 USD (not a live exchange rate).
+        </span>
+      </p>
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-        <StatCard
-          label="Total Cost"
-          value={isModelLoading ? '—' : formatCost(totalCost)}
-          icon={<IconDollar />}
-          iconColor="purple"
+      {modelQuery.isError && modelUsage == null ? (
+        <ErrorState
+          variant="card"
+          className="mb-8"
+          title="Couldn't load cost by model"
+          error={modelQuery.error}
+          onRetry={() => void modelQuery.refetch()}
+          retrying={modelQuery.isFetching}
         />
-        <StatCard
-          label="Avg Cost / Day"
-          value={isModelLoading ? '—' : formatCost(avgCostPerDay)}
-          icon={<IconTrendingDown />}
-          iconColor="blue"
-        />
-        <StatCard
-          label="Top Model by Cost"
-          value={isModelLoading ? '—' : topModel}
-          icon={<IconCpu />}
-          iconColor="yellow"
-        />
-      </div>
+      ) : (
+        <>
+          {/* Stat cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+            {isModelLoading ? (
+              <StatCardSkeletons count={3} />
+            ) : (
+              <>
+                <StatCard label="Total Cost" value={formatCost(totalCost)} icon={<DollarSign className="w-4 h-4" />} iconColor="purple" />
+                <StatCard label="Avg Cost / Day" value={formatCost(avgCostPerDay)} icon={<TrendingDown className="w-4 h-4" />} iconColor="blue" />
+                <StatCard
+                  label="Top Model by Cost"
+                  value={topModel}
+                  icon={<Cpu className="w-4 h-4" />}
+                  iconColor="yellow"
+                  className="min-w-0 break-words"
+                />
+              </>
+            )}
+          </div>
 
-      {/* Cost by Model */}
-      <div className="mb-8">
-        <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-4">Cost by Model</h2>
-        <Table<ModelCostRow>
-          columns={modelColumns}
-          data={modelRows}
-          keyExtractor={(row) => row.group_key}
-          loading={isModelLoading}
-          emptyMessage="No cost data for the selected time range"
-        />
-      </div>
+          {canViewOrgUsage && orgId !== '' && <SpendBudgetCard orgId={orgId} formatCost={formatCost} className="mb-8" />}
+
+          {/* Cost by Model */}
+          <section className="mb-8" aria-labelledby="cost-by-model">
+            <h2 id="cost-by-model" className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-4">
+              Cost by Model
+            </h2>
+            <Table<ModelCostRow>
+              columns={modelColumns}
+              data={modelRows}
+              keyExtractor={(row) => row.group_key}
+              loading={isModelLoading}
+              emptyState={noCost('No model costs were recorded in the selected time range.')}
+            />
+          </section>
+        </>
+      )}
 
       {/* Daily Cost Trend */}
-      <div>
-        <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-4">Daily Cost Trend</h2>
-        <Table<DayCostRow>
-          columns={dailyColumns}
-          data={dayRowsDesc}
-          keyExtractor={(row) => row.group_key}
-          loading={isDayLoading}
-          emptyMessage="No daily cost data for the selected time range"
-        />
-      </div>
-    </>
+      <section aria-labelledby="cost-daily">
+        <h2 id="cost-daily" className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-4">
+          Daily Cost Trend
+        </h2>
+        {dayQuery.isError && dayUsage == null ? (
+          <ErrorState
+            variant="card"
+            title="Couldn't load daily costs"
+            error={dayQuery.error}
+            onRetry={() => void dayQuery.refetch()}
+            retrying={dayQuery.isFetching}
+          />
+        ) : (
+          <div className="space-y-4">
+            <ChartSection
+              title="Cost per day"
+              description="Estimated cost per UTC day."
+              query={dayQuery}
+              loading={isDayLoading}
+              isEmpty={dayRows.length === 0 && !(compare && (prevDayData ?? []).length > 0)}
+              emptyTitle="No cost data"
+              emptyDescription="No daily costs were recorded in the selected time range."
+              errorTitle="Couldn't load daily costs"
+              actions={
+                <Toggle
+                  checked={compare}
+                  onChange={setCompare}
+                  size="sm"
+                  label="Compare to previous period"
+                  aria-label="Compare to previous period"
+                />
+              }
+            >
+              <TimeSeriesChart
+                ariaLabel="Estimated cost per day"
+                data={dayPoints}
+                height={220}
+                formatValue={formatCost}
+                seriesLabel="This period"
+                previousLabel="Previous period"
+                showPrevious={compare}
+              />
+            </ChartSection>
+            <Table<DayCostRow>
+              columns={dailyColumns}
+              data={dayRowsDesc}
+              keyExtractor={(row) => row.group_key}
+              loading={isDayLoading}
+              emptyState={noCost('No daily costs were recorded in the selected time range.')}
+            />
+          </div>
+        )}
+      </section>
+    </div>
   )
 }

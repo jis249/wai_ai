@@ -10,6 +10,7 @@ from wai.api.admin.common import (
     ROLE_ORG_ADMIN,
     ROLE_SYSTEM_ADMIN,
     ROLE_TEAM_ADMIN,
+    bad_request,
     forbidden,
     has_role,
     not_found,
@@ -32,6 +33,67 @@ class MCPAccessResponse(BaseModel):
 def _require_org_access(key_info: KeyInfo, org_id: str) -> None:
     if not has_role(key_info.role, ROLE_SYSTEM_ADMIN) and key_info.org_id != org_id:
         raise forbidden()
+
+
+async def _load_team_in_org(h, key_info: KeyInfo, org_id: str, team_id: str) -> dict:
+    _require_org_access(key_info, org_id)
+    team = await repo.get_team(h.db, team_id)
+    if not team or team["org_id"] != org_id:
+        raise not_found("team not found")
+    return team
+
+
+async def _require_team_read(h, key_info: KeyInfo, org_id: str, team_id: str) -> dict:
+    """Org admins; a team key / team SA key bound to this team; or a human member of the team."""
+    team = await _load_team_in_org(h, key_info, org_id, team_id)
+    if has_role(key_info.role, ROLE_ORG_ADMIN):
+        return team
+    if key_info.team_id and key_info.team_id == team_id:
+        return team
+    if key_info.user_id and await repo.is_team_member(h.db, key_info.user_id, team_id):
+        return team
+    raise not_found("team not found")
+
+
+async def _require_team_write(h, key_info: KeyInfo, org_id: str, team_id: str) -> dict:
+    """Org admins, or a human user (not a team/SA machine key) with team_admin rank who
+    is a member of this team."""
+    team = await _require_team_read(h, key_info, org_id, team_id)
+    if has_role(key_info.role, ROLE_ORG_ADMIN):
+        return team
+    if (
+        key_info.user_id
+        and has_role(key_info.role, ROLE_TEAM_ADMIN)
+        and await repo.is_team_member(h.db, key_info.user_id, team_id)
+    ):
+        return team
+    raise forbidden()
+
+
+async def _validate_server_ids(db, org_id: str, team_id: str | None, server_ids: list[str]) -> list[str]:
+    """Reject server ids that are not visible to the org: global servers, the org's own
+    org-scoped servers, or (when team_id is given) that team's servers."""
+    ids = list(dict.fromkeys(s for s in server_ids if s))
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    params: list = [*ids, org_id]
+    team_clause = ""
+    if team_id:
+        team_clause = " OR (org_id = ? AND team_id = ?)"
+        params += [org_id, team_id]
+    rows = await db.fetchall(
+        f"""SELECT id FROM mcp_servers
+            WHERE id IN ({placeholders}) AND deleted_at IS NULL
+              AND ((org_id IS NULL AND team_id IS NULL)
+                   OR (org_id = ? AND team_id IS NULL){team_clause})""",
+        tuple(params),
+    )
+    found = {r["id"] for r in rows}
+    unknown = [s for s in ids if s not in found]
+    if unknown:
+        raise bad_request(f"unknown mcp server ids: {', '.join(unknown)}")
+    return ids
 
 
 async def _get_mcp_access(db, table: str, col: str, entity_id: str) -> list[str]:
@@ -83,10 +145,7 @@ async def get_team_mcp_access(
     key_info: KeyInfo = Depends(require_role(ROLE_TEAM_ADMIN)),
 ) -> MCPAccessResponse:
     h = get_handler()
-    _require_org_access(key_info, org_id)
-    team = await repo.get_team(h.db, team_id)
-    if not team or team["org_id"] != org_id:
-        raise not_found("team not found")
+    await _require_team_read(h, key_info, org_id, team_id)
     ids = await _get_mcp_access(h.db, "team_mcp_access", "team_id", team_id)
     return MCPAccessResponse(server_ids=ids)
 
@@ -99,9 +158,10 @@ async def set_team_mcp_access(
     key_info: KeyInfo = Depends(require_role(ROLE_TEAM_ADMIN)),
 ) -> MCPAccessResponse:
     h = get_handler()
-    _require_org_access(key_info, org_id)
-    await _set_mcp_access(h.db, "team_mcp_access", "team_id", team_id, body.server_ids)
-    return MCPAccessResponse(server_ids=body.server_ids)
+    await _require_team_write(h, key_info, org_id, team_id)
+    ids = await _validate_server_ids(h.db, org_id, team_id, body.server_ids)
+    await _set_mcp_access(h.db, "team_mcp_access", "team_id", team_id, ids)
+    return MCPAccessResponse(server_ids=ids)
 
 
 @router.get("/orgs/{org_id}/keys/{key_id}/mcp-access", response_model=MCPAccessResponse)
@@ -128,8 +188,12 @@ async def set_key_mcp_access(
 ) -> MCPAccessResponse:
     h = get_handler()
     _require_org_access(key_info, org_id)
-    await _set_mcp_access(h.db, "key_mcp_access", "key_id", key_id, body.server_ids)
-    return MCPAccessResponse(server_ids=body.server_ids)
+    key = await repo.get_api_key(h.db, key_id)
+    if not key or key["org_id"] != org_id:
+        raise not_found("api key not found")
+    ids = await _validate_server_ids(h.db, org_id, key.get("team_id") or None, body.server_ids)
+    await _set_mcp_access(h.db, "key_mcp_access", "key_id", key_id, ids)
+    return MCPAccessResponse(server_ids=ids)
 
 
 @router.get("/orgs/{org_id}/available-mcp-servers")

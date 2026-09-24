@@ -42,35 +42,38 @@ describe('StatCard', () => {
   })
 
   describe('Trend', () => {
-    it('positive trend shows ▲ and success color class', () => {
-      render(<StatCard label="Revenue" value="$500" trend={{ value: 12 }} />)
-      const trendEl = screen.getByText(/▲/)
-      expect(trendEl).toBeInTheDocument()
+    const trendOf = (container: HTMLElement) => container.querySelector('[data-slot="trend"]') as HTMLElement
+
+    it('positive trend shows ▲, announces Up, and uses the success color', () => {
+      const { container } = render(<StatCard label="Revenue" value="$500" trend={{ value: 12 }} />)
+      const trendEl = trendOf(container)
+      expect(trendEl.textContent).toBe('▲Up 12')
       expect(trendEl.className).toContain('text-success')
+      expect(screen.getByText('▲')).toHaveAttribute('aria-hidden', 'true')
     })
 
     it('negative trend shows ▼ with absolute value and error color class', () => {
-      render(<StatCard label="Revenue" value="$500" trend={{ value: -5 }} />)
-      const trendEl = screen.getByText('▼ 5')
-      expect(trendEl).toBeInTheDocument()
+      const { container } = render(<StatCard label="Revenue" value="$500" trend={{ value: -5 }} />)
+      const trendEl = trendOf(container)
+      expect(trendEl.textContent).toBe('▼Down 5')
       expect(trendEl.className).toContain('text-error')
     })
 
     it('zero trend shows — and tertiary color class', () => {
-      render(<StatCard label="Revenue" value="$500" trend={{ value: 0 }} />)
-      const trendEl = screen.getByText(/—/)
-      expect(trendEl).toBeInTheDocument()
+      const { container } = render(<StatCard label="Revenue" value="$500" trend={{ value: 0 }} />)
+      const trendEl = trendOf(container)
+      expect(trendEl.textContent).toContain('No change')
       expect(trendEl.className).toContain('text-text-tertiary')
     })
 
     it('renders trend label when provided', () => {
-      render(<StatCard label="Revenue" value="$500" trend={{ value: 8, label: 'vs last month' }} />)
-      expect(screen.getByText('▲ vs last month')).toBeInTheDocument()
+      const { container } = render(<StatCard label="Revenue" value="$500" trend={{ value: 8, label: 'vs last month' }} />)
+      expect(trendOf(container).textContent).toBe('▲Up vs last month')
     })
 
     it('shows numeric value when no label provided', () => {
-      render(<StatCard label="Revenue" value="$500" trend={{ value: 8 }} />)
-      expect(screen.getByText('▲ 8')).toBeInTheDocument()
+      const { container } = render(<StatCard label="Revenue" value="$500" trend={{ value: 8 }} />)
+      expect(trendOf(container).textContent).toBe('▲Up 8')
     })
   })
 

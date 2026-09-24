@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import random
+import threading
 from dataclasses import replace
-from typing import Callable
+from typing import Callable, Collection
 
-from wai.proxy.registry import Deployment, Model
+from wai.proxy.registry import Deployment, Model, same_host
 
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+
+_rr_lock = threading.Lock()
+_rr_counters: dict[str, int] = {}
+
+
+def _next_round_robin(model_name: str, counters: dict[str, int] | None) -> int:
+    store = _rr_counters if counters is None else counters
+    with _rr_lock:
+        n = store.get(model_name, 0)
+        store[model_name] = n + 1
+    return n
 
 
 def select_deployment(
@@ -16,11 +28,35 @@ def select_deployment(
     *,
     rng: random.Random | None = None,
     inflight: dict[str, int] | None = None,
+    exclude: Collection[str] | None = None,
+    rr_counters: dict[str, int] | None = None,
+    allow: Callable[[Deployment], bool] | None = None,
+    last_failure: Callable[[Deployment], float] | None = None,
 ) -> Deployment | None:
-    """Pick a deployment using the model's strategy (weighted, priority, least-busy, or first)."""
+    """Pick a deployment using the model's strategy.
+
+    Strategies: weighted, priority (lower value = higher priority), round-robin
+    (per-model counter), least-busy, or first. Deployments whose ``base_url`` is in
+    ``exclude`` (e.g. ones that already failed this request) are skipped unless
+    that would leave no candidates.
+
+    ``allow`` (circuit breaker) filters out deployments whose circuit is open. If
+    every remaining deployment is blocked, the one that failed least recently
+    (``last_failure``) is returned so traffic is never blackholed.
+    """
     deps = [d for d in model.deployments if d.base_url]
     if not deps:
         return None
+    if exclude:
+        remaining = [d for d in deps if d.base_url not in exclude]
+        if remaining:
+            deps = remaining
+    if allow is not None:
+        admitted = [d for d in deps if allow(d)]
+        if admitted:
+            deps = admitted
+        elif last_failure is not None:
+            return min(deps, key=last_failure)
     picker = rng or random
     strategy = (model.strategy or "").lower().strip()
     if strategy in {"least-busy", "least_busy", "least-latency"}:
@@ -30,7 +66,9 @@ def select_deployment(
         weights = [max(int(d.weight or 0), 1) for d in deps]
         return picker.choices(deps, weights=weights, k=1)[0]
     if strategy in {"priority", "failover"}:
-        return sorted(deps, key=lambda d: int(d.priority or 0), reverse=True)[0]
+        return min(deps, key=lambda d: int(d.priority or 0))
+    if strategy in {"round-robin", "round_robin", "roundrobin", "rr"}:
+        return deps[_next_round_robin(model.name, rr_counters) % len(deps)]
     return deps[0]
 
 
@@ -53,7 +91,9 @@ def apply_deployment(model: Model, deployment: Deployment | None) -> Model:
         model,
         provider=deployment.provider or model.provider,
         base_url=deployment.base_url or model.base_url,
-        api_key=deployment.api_key or model.api_key,
+        # Never send the model's key to a deployment on a different host.
+        api_key=deployment.api_key
+        or (model.api_key if not deployment.base_url or same_host(deployment.base_url, model.base_url) else ""),
         azure_deployment=deployment.azure_deployment or model.azure_deployment,
         azure_api_version=deployment.azure_api_version or model.azure_api_version,
         gcp_project=deployment.gcp_project or model.gcp_project,

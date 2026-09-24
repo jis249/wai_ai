@@ -2,8 +2,15 @@ import { useMemo, useState } from 'react'
 import { StatCard } from '../../components/ui/StatCard'
 import { Table } from '../../components/ui/Table'
 import type { Column } from '../../components/ui/Table'
-import { Button } from '../../components/ui/Button'
-import { Select } from '../../components/ui/Select'
+import { EmptyState } from '../../components/ui/EmptyState'
+import { ErrorState } from '../../components/ui/ErrorState'
+import { SegmentedControl } from '../../components/ui/SegmentedControl'
+import { TimeRangePicker } from '../../components/ui/TimeRangePicker'
+import { Activity, DollarSign, Route, Sparkles } from '../../components/ui/icons'
+import { ChartSection } from '../../components/analytics/ChartSection'
+import { ExportButtons } from '../../components/analytics/ExportButtons'
+import { StatCardSkeletons } from '../../components/analytics/StatCardSkeletons'
+import { UsageScopeToggle } from '../../components/analytics/UsageScopeToggle'
 import { HorizontalBar } from '../../components/ui/charts'
 import { useMe } from '../../hooks/useMe'
 import {
@@ -14,25 +21,11 @@ import {
   type AutoRoutingUsageRow,
 } from '../../hooks/useAutoUsage'
 import { formatCost, formatNumber, formatTokens } from '../../lib/utils'
-import { exportData } from '../../lib/export'
+import { useTimeRange, type TimeRangeValue } from '../../lib/timeRange'
 
-const TIME_RANGES = ['24h', '7d', '30d', '90d'] as const
-type TimeRange = (typeof TIME_RANGES)[number]
+type AutoUsageView = 'user_model' | 'model'
 
-const RANGE_HOURS: Record<TimeRange, number> = {
-  '24h': 24,
-  '7d': 168,
-  '30d': 720,
-  '90d': 2160,
-}
-
-function getTimeRange(range: TimeRange): { from: string; to: string } {
-  const now = new Date()
-  const from = new Date(now.getTime() - RANGE_HOURS[range] * 3_600_000)
-  return { from: from.toISOString(), to: now.toISOString() }
-}
-
-const VIEW_OPTIONS = [
+const VIEW_OPTIONS: { value: AutoUsageView; label: string }[] = [
   { value: 'user_model', label: 'By user' },
   { value: 'model', label: 'Routed model only' },
 ]
@@ -186,41 +179,6 @@ const MODEL_EXPORT_HEADERS = [
   { key: 'cost_estimate', label: 'Cost' },
 ]
 
-function ActivityIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-    </svg>
-  )
-}
-
-function SparklesIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3l1.88 5.76a1 1 0 00.95.69H21l-5.12 3.72a1 1 0 00-.36 1.12L17.4 20 12 16.28 6.6 20l1.88-5.71a1 1 0 00-.36-1.12L3 9.45h6.17a1 1 0 00.95-.69L12 3z" />
-    </svg>
-  )
-}
-
-function DollarIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="12" y1="1" x2="12" y2="23" />
-      <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />
-    </svg>
-  )
-}
-
-function DownloadIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-      <polyline points="7 10 12 15 17 10" />
-      <line x1="12" y1="15" x2="12" y2="3" />
-    </svg>
-  )
-}
-
 function buildUserGroupColumns(
   showOrg: boolean,
   showUser: boolean,
@@ -339,8 +297,8 @@ const buildModelColumns = (defaultModel: string): Column<AutoRoutingModelUsage>[
 ]
 
 export default function AutoUsagePage() {
-  const [range, setRange] = useState<TimeRange>('7d')
-  const [view, setView] = useState('user_model')
+  const [range, setRange] = useState<TimeRangeValue>('7d')
+  const [view, setView] = useState<AutoUsageView>('user_model')
   const [crossOrg, setCrossOrg] = useState(false)
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
 
@@ -349,7 +307,7 @@ export default function AutoUsagePage() {
   const isSystemAdmin = me?.is_system_admin === true
   const canViewOrgUsage = isSystemAdmin || me?.role === 'org_admin'
 
-  const { from, to } = useMemo(() => getTimeRange(range), [range])
+  const { from, to } = useTimeRange(range)
 
   const orgUsage = useOrgAutoUsage(orgId, from, to, !!me && canViewOrgUsage && !crossOrg)
   const myUsage = useMyAutoUsage(from, to, !!me && !canViewOrgUsage)
@@ -363,6 +321,7 @@ export default function AutoUsagePage() {
 
   const { data: usage, isLoading } = activeResult
   const isDataLoading = isLoading && !!me
+  const loadFailed = activeResult.isError && usage == null
 
   const showOrg = crossOrg && isSystemAdmin
   const showUser = canViewOrgUsage || crossOrg
@@ -408,52 +367,20 @@ export default function AutoUsagePage() {
     return [...(usage?.by_model ?? [])].sort((a, b) => b.total_tokens - a.total_tokens).slice(0, 5)
   }, [usage])
 
-  return (
-    <>
-      <div className="flex items-center gap-4 mb-6 flex-wrap">
-        {isSystemAdmin && (
-          <div className="inline-flex gap-1 p-1 rounded-lg bg-bg-tertiary">
-            <button
-              type="button"
-              onClick={() => setCrossOrg(false)}
-              className={
-                !crossOrg
-                  ? 'px-4 py-1.5 rounded-md text-sm font-medium bg-bg-secondary text-text-primary shadow-sm transition-colors'
-                  : 'px-4 py-1.5 rounded-md text-sm font-medium text-text-tertiary hover:text-text-secondary transition-colors'
-              }
-            >
-              My Organization
-            </button>
-            <button
-              type="button"
-              onClick={() => setCrossOrg(true)}
-              className={
-                crossOrg
-                  ? 'px-4 py-1.5 rounded-md text-sm font-medium bg-bg-secondary text-text-primary shadow-sm transition-colors'
-                  : 'px-4 py-1.5 rounded-md text-sm font-medium text-text-tertiary hover:text-text-secondary transition-colors'
-              }
-            >
-              All Organizations
-            </button>
-          </div>
-        )}
+  const emptyState = (
+    <EmptyState
+      icon={<Route className="w-6 h-6" />}
+      title="No auto-routed requests"
+      description='No requests with model "auto" were recorded in the selected time range.'
+      className="py-8"
+    />
+  )
 
-        <div className="inline-flex gap-1 p-1 rounded-lg bg-bg-tertiary">
-          {TIME_RANGES.map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRange(r)}
-              className={
-                range === r
-                  ? 'px-3 py-1.5 rounded-md text-sm font-medium bg-bg-secondary text-text-primary shadow-sm transition-colors'
-                  : 'px-3 py-1.5 rounded-md text-sm font-medium text-text-tertiary hover:text-text-secondary transition-colors'
-              }
-            >
-              {r}
-            </button>
-          ))}
-        </div>
+  return (
+    <div className="min-w-0">
+      <div className="flex items-center gap-3 mb-6 flex-wrap">
+        {isSystemAdmin && <UsageScopeToggle crossOrg={crossOrg} onChange={setCrossOrg} />}
+        <TimeRangePicker value={range} onChange={setRange} />
       </div>
 
       <p className="text-sm text-text-tertiary mb-6">
@@ -461,109 +388,101 @@ export default function AutoUsagePage() {
         expand the token breakdown by routed model.
       </p>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <StatCard
-          label="Auto requests"
-          value={isDataLoading ? '...' : formatNumber(usage?.total_requests ?? 0)}
-          icon={<ActivityIcon />}
-          iconColor="purple"
-        />
-        <StatCard
-          label="Total tokens"
-          value={isDataLoading ? '...' : formatTokens(usage?.total_tokens ?? 0)}
-          icon={<SparklesIcon />}
-          iconColor="blue"
-        />
-        <StatCard
-          label="Est. cost"
-          value={isDataLoading ? '...' : formatCost(usage?.cost_estimate ?? 0)}
-          icon={<DollarIcon />}
-          iconColor="green"
-        />
-      </div>
-
-      <div className="flex items-center gap-3 mb-6">
-        <div className="ml-auto flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-text-tertiary whitespace-nowrap">View</span>
-            <div className="w-44">
-              <Select value={view} onChange={setView} options={VIEW_OPTIONS} fullWidth />
-            </div>
-          </div>
-
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() =>
-              exportData(
-                exportRows as unknown as Record<string, unknown>[],
-                exportHeaders,
-                `wai-auto-usage-${view}`,
-                'csv',
-              )
-            }
-            disabled={exportRows.length === 0}
-          >
-            <span className="flex items-center gap-1.5">
-              <DownloadIcon />
-              CSV
-            </span>
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() =>
-              exportData(
-                exportRows as unknown as Record<string, unknown>[],
-                exportHeaders,
-                `wai-auto-usage-${view}`,
-                'json',
-              )
-            }
-            disabled={exportRows.length === 0}
-          >
-            <span className="flex items-center gap-1.5">
-              <DownloadIcon />
-              JSON
-            </span>
-          </Button>
-        </div>
-      </div>
-
-      {view === 'user_model' ? (
-        <Table<UserAutoUsageGroup>
-          columns={userGroupColumns}
-          data={userGroups}
-          keyExtractor={userGroupKey}
-          loading={isDataLoading}
-          emptyMessage="No auto routing usage for the selected time range"
-          expandedKeys={expandedKeys}
-          onToggleExpand={toggleExpand}
-          onRowClick={(row) => toggleExpand(userGroupKey(row))}
-          renderExpandedRow={(row) => (
-            <UserModelBreakdown models={row.models} defaultModel={defaultModel} />
-          )}
+      {loadFailed ? (
+        <ErrorState
+          variant="card"
+          title="Couldn't load auto-routing usage"
+          error={activeResult.error}
+          onRetry={() => void activeResult.refetch()}
+          retrying={activeResult.isFetching}
         />
       ) : (
-        <Table<AutoRoutingModelUsage>
-          columns={modelColumns}
-          data={usage?.by_model ?? []}
-          keyExtractor={(row) => row.routed_model}
-          loading={isDataLoading}
-          emptyMessage="No auto routing usage for the selected time range"
-        />
-      )}
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+            {isDataLoading ? (
+              <StatCardSkeletons count={3} />
+            ) : (
+              <>
+                <StatCard
+                  label="Auto requests"
+                  value={formatNumber(usage?.total_requests ?? 0)}
+                  icon={<Activity className="w-4 h-4" />}
+                  iconColor="purple"
+                />
+                <StatCard
+                  label="Total tokens"
+                  value={formatTokens(usage?.total_tokens ?? 0)}
+                  icon={<Sparkles className="w-4 h-4" />}
+                  iconColor="blue"
+                />
+                <StatCard
+                  label="Est. cost"
+                  value={formatCost(usage?.cost_estimate ?? 0)}
+                  icon={<DollarSign className="w-4 h-4" />}
+                  iconColor="green"
+                />
+              </>
+            )}
+          </div>
 
-      <div className="mt-6 bg-bg-secondary rounded-xl border border-border p-6">
-        <h3 className="text-sm font-semibold text-text-primary mb-4">Top routed models by tokens</h3>
-        <HorizontalBar
-          items={topModels.map((d) => ({
-            label: d.routed_model,
-            value: d.total_tokens,
-            detail: formatTokens(d.total_tokens),
-          }))}
-        />
-      </div>
-    </>
+          <div className="flex flex-wrap items-center justify-end gap-3 mb-4">
+            <SegmentedControl<AutoUsageView>
+              aria-label="Table view"
+              options={VIEW_OPTIONS}
+              value={view}
+              onChange={setView}
+              size="sm"
+            />
+            <ExportButtons
+              data={exportRows}
+              headers={exportHeaders}
+              filenamePrefix={`wai-auto-usage-${view}`}
+              subject="auto-routing usage"
+            />
+          </div>
+
+          {view === 'user_model' ? (
+            <Table<UserAutoUsageGroup>
+              columns={userGroupColumns}
+              data={userGroups}
+              keyExtractor={userGroupKey}
+              loading={isDataLoading}
+              emptyState={emptyState}
+              expandedKeys={expandedKeys}
+              onToggleExpand={toggleExpand}
+              onRowClick={(row) => toggleExpand(userGroupKey(row))}
+              renderExpandedRow={(row) => (
+                <UserModelBreakdown models={row.models} defaultModel={defaultModel} />
+              )}
+            />
+          ) : (
+            <Table<AutoRoutingModelUsage>
+              columns={modelColumns}
+              data={usage?.by_model ?? []}
+              keyExtractor={(row) => row.routed_model}
+              loading={isDataLoading}
+              emptyState={emptyState}
+            />
+          )}
+
+          <ChartSection
+            className="mt-6"
+            title="Top routed models by tokens"
+            loading={isDataLoading}
+            isEmpty={topModels.length === 0}
+            emptyTitle="No auto-routed requests"
+            emptyDescription='No requests with model "auto" were recorded in the selected time range.'
+          >
+            <HorizontalBar
+              items={topModels.map((d) => ({
+                label: d.routed_model,
+                value: d.total_tokens,
+                detail: formatTokens(d.total_tokens),
+              }))}
+            />
+          </ChartSection>
+        </>
+      )}
+    </div>
   )
 }

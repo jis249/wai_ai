@@ -87,3 +87,37 @@ export function useDeleteOrgMember(orgId: string) {
     },
   })
 }
+
+export interface OrgMemberOption {
+  userId: string
+  label: string
+  description: string
+}
+
+/**
+ * Org members resolved to name/email, for pickers (e.g. adding a team member:
+ * team members must already belong to the org). Excludes `excludeUserIds`.
+ */
+export function useOrgMemberOptions(orgId: string, excludeUserIds: ReadonlySet<string>) {
+  return useQuery({
+    queryKey: ['org-member-options', orgId],
+    queryFn: async (): Promise<OrgMemberOption[]> => {
+      const membersRes = await apiClient<{ data: OrgMembershipResponse[] }>(
+        `/orgs/${orgId}/members?limit=200`,
+      )
+      return Promise.all(
+        membersRes.data.map(async (m) => {
+          try {
+            const user = await apiClient<{ display_name: string; email: string }>(`/users/${m.user_id}`)
+            return { userId: m.user_id, label: user.display_name, description: user.email }
+          } catch {
+            return { userId: m.user_id, label: m.user_id, description: '' }
+          }
+        }),
+      )
+    },
+    select: (options) => options.filter((u) => !excludeUserIds.has(u.userId)),
+    enabled: !!orgId,
+    staleTime: 60_000,
+  })
+}

@@ -2,6 +2,10 @@ import { Component, type ErrorInfo, type ReactNode } from 'react'
 
 interface Props {
   children: ReactNode
+  /** Custom fallback. Receives the error and a `reset` that re-renders children. Default: full-screen reload card. */
+  fallback?: (error: Error, reset: () => void) => ReactNode
+  /** When this value changes while showing the fallback, the boundary resets (e.g. location.pathname). */
+  resetKey?: unknown
 }
 
 interface State {
@@ -19,8 +23,19 @@ export class ErrorBoundary extends Component<Props, State> {
     console.error('WAI UI error', error, info.componentStack)
   }
 
+  componentDidUpdate(prevProps: Props) {
+    if (this.state.error != null && prevProps.resetKey !== this.props.resetKey) {
+      this.reset()
+    }
+  }
+
+  reset = () => {
+    this.setState({ error: null })
+  }
+
   render() {
     if (this.state.error) {
+      if (this.props.fallback) return this.props.fallback(this.state.error, this.reset)
       return (
         <div className="min-h-screen flex items-center justify-center p-8 bg-bg-primary">
           <div className="max-w-md rounded-xl border border-border bg-bg-secondary p-8 space-y-3">

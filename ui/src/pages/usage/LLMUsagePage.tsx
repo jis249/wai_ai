@@ -2,30 +2,26 @@ import { useMemo, useState } from 'react'
 import { StatCard } from '../../components/ui/StatCard'
 import { Table } from '../../components/ui/Table'
 import type { Column } from '../../components/ui/Table'
-import { Button } from '../../components/ui/Button'
 import { Select } from '../../components/ui/Select'
-import { AreaChart, DonutChart, HorizontalBar } from '../../components/ui/charts'
+import { Card, CardHeader } from '../../components/ui/Card'
+import { EmptyState } from '../../components/ui/EmptyState'
+import { ErrorState } from '../../components/ui/ErrorState'
+import { Skeleton } from '../../components/ui/Skeleton'
+import { TimeRangePicker } from '../../components/ui/TimeRangePicker'
+import { Activity, ChartColumn, DollarSign, Sparkles } from '../../components/ui/icons'
+import { DonutChart, HorizontalBar, TimeSeriesChart } from '../../components/ui/charts'
+import { Toggle } from '../../components/ui/Toggle'
+import { ExportButtons } from '../../components/analytics/ExportButtons'
+import { buildCompareSeries } from '../../components/analytics/compareSeries'
+import { bucketRange, requestLogsUrl } from '../../components/analytics/drilldown'
+import { previousWindow } from '../../components/analytics/timeSeries'
+import { UsageScopeToggle } from '../../components/analytics/UsageScopeToggle'
 import { useMe } from '../../hooks/useMe'
 import { useUsage, useMyUsage, useCrossOrgUsage } from '../../hooks/useUsage'
 import type { UsageDataPoint } from '../../hooks/useUsage'
 import { formatNumber, formatTokens, formatCost } from '../../lib/utils'
-import { exportData } from '../../lib/export'
-
-const TIME_RANGES = ['24h', '7d', '30d', '90d'] as const
-type TimeRange = (typeof TIME_RANGES)[number]
-
-const RANGE_HOURS: Record<TimeRange, number> = {
-  '24h': 24,
-  '7d': 168,
-  '30d': 720,
-  '90d': 2160,
-}
-
-function getTimeRange(range: TimeRange): { from: string; to: string } {
-  const now = new Date()
-  const from = new Date(now.getTime() - RANGE_HOURS[range] * 3_600_000)
-  return { from: from.toISOString(), to: now.toISOString() }
-}
+import { chartColor } from '../../lib/chartColors'
+import { useTimeRange, type TimeGranularity, type TimeRangeValue } from '../../lib/timeRange'
 
 const BASE_GROUP_BY_OPTIONS = [
   { value: 'model', label: 'Model' },
@@ -128,59 +124,22 @@ const USAGE_EXPORT_HEADERS = [
 ]
 
 // ---------------------------------------------------------------------------
-// Icons
-// ---------------------------------------------------------------------------
-
-function ActivityIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-    </svg>
-  )
-}
-
-function SparklesIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3l1.88 5.76a1 1 0 00.95.69H21l-5.12 3.72a1 1 0 00-.36 1.12L17.4 20 12 16.28 6.6 20l1.88-5.71a1 1 0 00-.36-1.12L3 9.45h6.17a1 1 0 00.95-.69L12 3z" />
-    </svg>
-  )
-}
-
-function DollarIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="12" y1="1" x2="12" y2="23" />
-      <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />
-    </svg>
-  )
-}
-
-function DownloadIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-      <polyline points="7 10 12 15 17 10" />
-      <line x1="12" y1="15" x2="12" y2="3" />
-    </svg>
-  )
-}
-
-// ---------------------------------------------------------------------------
 // LLMUsagePage
 // ---------------------------------------------------------------------------
 
 export default function LLMUsagePage() {
-  const [range, setRange] = useState<TimeRange>('24h')
+  const [range, setRange] = useState<TimeRangeValue>('24h')
   const [groupBy, setGroupBy] = useState('model')
   const [crossOrg, setCrossOrg] = useState(false)
+  const [compare, setCompare] = useState(false)
 
   const { data: me } = useMe()
   const orgId = me?.org_id ?? ''
   const isSystemAdmin = me?.is_system_admin === true
   const canViewOrgUsage = isSystemAdmin || me?.role === 'org_admin'
 
-  const { from, to } = useMemo(() => getTimeRange(range), [range])
+  const { from, to, granularity } = useTimeRange(range)
+  const prev = useMemo(() => previousWindow(from, to), [from, to])
 
   const orgUsage = useUsage(orgId, from, to, groupBy, !!me && canViewOrgUsage)
   const myUsage = useMyUsage(from, to, groupBy, !!me && !canViewOrgUsage)
@@ -194,13 +153,37 @@ export default function LLMUsagePage() {
 
   const { data: usage, isLoading } = activeResult
 
-  // Daily trend data - only when groupBy is not already 'day'/'hour', and not cross-org
-  const needsDailyTrend = !crossOrg && groupBy !== 'day' && groupBy !== 'hour'
-  const orgDailyUsage = useUsage(orgId, from, to, 'day', !!me && canViewOrgUsage && needsDailyTrend)
-  const myDailyUsage = useMyUsage(from, to, 'day', !!me && !canViewOrgUsage && needsDailyTrend)
-  const dailyUsage = canViewOrgUsage ? orgDailyUsage : myDailyUsage
-  // Use main data directly when groupBy is already day or hour
-  const trendData = needsDailyTrend ? dailyUsage.data?.data : usage?.data
+  // Trend buckets: the table's own day/hour grouping, else hourly for <=48h and daily beyond.
+  // Not shown cross-org.
+  const trendGroup: TimeGranularity = groupBy === 'day' || groupBy === 'hour' ? groupBy : granularity
+  const needsSeparateTrend = !crossOrg && groupBy !== trendGroup
+  const orgTrendUsage = useUsage(orgId, from, to, trendGroup, !!me && canViewOrgUsage && needsSeparateTrend)
+  const myTrendUsage = useMyUsage(from, to, trendGroup, !!me && !canViewOrgUsage && needsSeparateTrend)
+  const separateTrend = canViewOrgUsage ? orgTrendUsage : myTrendUsage
+  const trendQuery = needsSeparateTrend ? separateTrend : activeResult
+  // Use main data directly when groupBy is already the trend bucket
+  const trendData = needsSeparateTrend ? separateTrend.data?.data : usage?.data
+
+  // Previous window (same length, just before `from`) for the dashed comparison series.
+  const wantPrevious = compare && !crossOrg && !!me
+  const orgPrevUsage = useUsage(orgId, prev.from, prev.to, trendGroup, wantPrevious && canViewOrgUsage)
+  const myPrevUsage = useMyUsage(prev.from, prev.to, trendGroup, wantPrevious && !canViewOrgUsage)
+  const prevData = (canViewOrgUsage ? orgPrevUsage : myPrevUsage).data?.data
+
+  const trendPoints = useMemo(
+    () =>
+      buildCompareSeries({
+        from,
+        to,
+        granularity: trendGroup,
+        current: (trendData ?? []).map((d) => ({ key: d.group_key, value: d.total_requests })),
+        previous:
+          compare && prevData != null
+            ? prevData.map((d) => ({ key: d.group_key, value: d.total_requests }))
+            : null,
+      }),
+    [from, to, trendGroup, trendData, compare, prevData],
+  )
 
   // When switching away from cross-org, reset group_by if it was set to 'org'
   const handleCrossOrgToggle = (next: boolean) => {
@@ -236,189 +219,181 @@ export default function LLMUsagePage() {
   const columns = useMemo(() => buildColumns(groupBy), [groupBy])
 
   const isDataLoading = isLoading && !!me && (crossOrg ? isSystemAdmin : canViewOrgUsage ? !!orgId : true)
+  const loadFailed = activeResult.isError && usage == null
 
   const totalPrompt = usage?.data?.reduce((s, d) => s + d.prompt_tokens, 0) ?? 0
   const totalCompletion = usage?.data?.reduce((s, d) => s + d.completion_tokens, 0) ?? 0
 
   const top5 = sortedData.slice(0, 5)
 
+  const noData = (
+    <EmptyState
+      icon={<ChartColumn className="w-6 h-6" />}
+      title="No usage"
+      description="No LLM requests were recorded in the selected time range."
+      className="py-8"
+    />
+  )
+
   return (
-    <>
-      {/* Top controls: scope toggle + time range pills */}
-      <div className="flex items-center gap-4 mb-6 flex-wrap">
-        {isSystemAdmin && (
-          <div className="inline-flex gap-1 p-1 rounded-lg bg-bg-tertiary">
-            <button
-              type="button"
-              onClick={() => handleCrossOrgToggle(false)}
-              className={
-                !crossOrg
-                  ? 'px-4 py-1.5 rounded-md text-sm font-medium bg-bg-secondary text-text-primary shadow-sm transition-colors'
-                  : 'px-4 py-1.5 rounded-md text-sm font-medium text-text-tertiary hover:text-text-secondary transition-colors'
-              }
-            >
-              My Organization
-            </button>
-            <button
-              type="button"
-              onClick={() => handleCrossOrgToggle(true)}
-              className={
-                crossOrg
-                  ? 'px-4 py-1.5 rounded-md text-sm font-medium bg-bg-secondary text-text-primary shadow-sm transition-colors'
-                  : 'px-4 py-1.5 rounded-md text-sm font-medium text-text-tertiary hover:text-text-secondary transition-colors'
-              }
-            >
-              All Organizations
-            </button>
+    <div className="min-w-0">
+      {/* Top controls: scope toggle + time range */}
+      <div className="flex items-center gap-3 mb-6 flex-wrap">
+        {isSystemAdmin && <UsageScopeToggle crossOrg={crossOrg} onChange={handleCrossOrgToggle} />}
+        <TimeRangePicker value={range} onChange={setRange} />
+      </div>
+
+      {loadFailed ? (
+        <ErrorState
+          variant="card"
+          title="Couldn't load LLM usage"
+          error={activeResult.error}
+          onRetry={() => void activeResult.refetch()}
+          retrying={activeResult.isFetching}
+        />
+      ) : (
+        <>
+          {/* Stat cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+            {isDataLoading ? (
+              [0, 1, 2].map((i) => <Skeleton key={i} className="h-[124px] rounded-xl" />)
+            ) : (
+              <>
+                <StatCard
+                  label="Total Requests"
+                  value={formatTokens(totals.requests)}
+                  icon={<Activity className="w-4 h-4" />}
+                  iconColor="purple"
+                />
+                <StatCard
+                  label="Total Tokens"
+                  value={formatTokens(totals.tokens)}
+                  icon={<Sparkles className="w-4 h-4" />}
+                  iconColor="blue"
+                />
+                <StatCard
+                  label="Est. Cost"
+                  value={formatCost(totals.cost)}
+                  icon={<DollarSign className="w-4 h-4" />}
+                  iconColor="green"
+                />
+              </>
+            )}
           </div>
-        )}
 
-        <div className="inline-flex gap-1 p-1 rounded-lg bg-bg-tertiary">
-          {TIME_RANGES.map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRange(r)}
-              className={
-                range === r
-                  ? 'px-3 py-1.5 rounded-md text-sm font-medium bg-bg-secondary text-text-primary shadow-sm transition-colors'
-                  : 'px-3 py-1.5 rounded-md text-sm font-medium text-text-tertiary hover:text-text-secondary transition-colors'
-              }
-            >
-              {r}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Stat cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <StatCard
-          label="Total Requests"
-          value={isDataLoading ? '...' : formatTokens(totals.requests)}
-          icon={<ActivityIcon />}
-          iconColor="purple"
-        />
-        <StatCard
-          label="Total Tokens"
-          value={isDataLoading ? '...' : formatTokens(totals.tokens)}
-          icon={<SparklesIcon />}
-          iconColor="blue"
-        />
-        <StatCard
-          label="Est. Cost"
-          value={isDataLoading ? '...' : formatCost(totals.cost)}
-          icon={<DollarIcon />}
-          iconColor="green"
-        />
-      </div>
-
-      {/* Usage over Time chart - not shown in cross-org mode */}
-      {!crossOrg && (
-        <div className="bg-bg-secondary rounded-xl border border-border p-6 mb-6">
-          <h3 className="text-sm font-semibold text-text-primary mb-4">Usage over Time</h3>
-          <AreaChart
-            data={(trendData ?? []).map((d) => ({
-              label: d.group_key.length > 10 ? d.group_key.slice(5) : d.group_key,
-              value: d.total_requests,
-            }))}
-            height={220}
-            formatValue={formatNumber}
-          />
-        </div>
-      )}
-
-      {/* Controls bar */}
-      <div className="flex items-center gap-3 mb-6">
-        <div className="ml-auto flex items-center gap-3">
-          {/* Inline Group by label + select */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-text-tertiary whitespace-nowrap">Group by</span>
-            <div className="w-36">
-              <Select
-                value={groupBy}
-                onChange={setGroupBy}
-                options={groupByOptions}
-                fullWidth
+          {/* Usage over Time chart - not shown in cross-org mode */}
+          {!crossOrg && (
+            <Card className="mb-6">
+              <CardHeader
+                title="Usage over Time"
+                description={`Requests per ${trendGroup}. Select a point to open its requests.`}
+                className="flex-wrap"
+                actions={
+                  <Toggle
+                    checked={compare}
+                    onChange={setCompare}
+                    size="sm"
+                    label="Compare to previous period"
+                    aria-label="Compare to previous period"
+                  />
+                }
               />
+              {trendQuery.isError && trendData == null ? (
+                <ErrorState
+                  title="Couldn't load usage trend"
+                  error={trendQuery.error}
+                  onRetry={() => void trendQuery.refetch()}
+                  retrying={trendQuery.isFetching}
+                />
+              ) : trendQuery.isLoading ? (
+                <Skeleton className="h-[220px] w-full rounded-lg" />
+              ) : (trendData ?? []).length === 0 && !(compare && (prevData ?? []).length > 0) ? (
+                noData
+              ) : (
+                <TimeSeriesChart
+                  ariaLabel={`Requests per ${trendGroup}`}
+                  data={trendPoints}
+                  height={220}
+                  formatValue={formatNumber}
+                  seriesLabel="This period"
+                  previousLabel="Previous period"
+                  showPrevious={compare}
+                  getPointHref={(_, i) =>
+                    requestLogsUrl({ range: bucketRange(trendPoints[i].bucket, trendGroup) ?? range })
+                  }
+                  pointActionLabel="view requests in request logs"
+                />
+              )}
+            </Card>
+          )}
+
+          {/* Controls bar */}
+          <div className="flex flex-wrap items-center justify-end gap-3 mb-4">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-text-tertiary whitespace-nowrap">Group by</span>
+              <div className="w-36">
+                <Select value={groupBy} onChange={setGroupBy} options={groupByOptions} fullWidth />
+              </div>
             </div>
+            <ExportButtons
+              data={sortedData}
+              headers={USAGE_EXPORT_HEADERS}
+              filenamePrefix={`wai-usage-${groupBy}`}
+              subject="usage"
+            />
           </div>
 
-          {/* Export buttons */}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() =>
-              exportData(
-                sortedData as unknown as Record<string, unknown>[],
-                USAGE_EXPORT_HEADERS,
-                `wai-usage-${groupBy}`,
-                'csv',
-              )
-            }
-            disabled={sortedData.length === 0}
-          >
-            <span className="flex items-center gap-1.5">
-              <DownloadIcon />
-              CSV
-            </span>
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() =>
-              exportData(
-                sortedData as unknown as Record<string, unknown>[],
-                USAGE_EXPORT_HEADERS,
-                `wai-usage-${groupBy}`,
-                'json',
-              )
-            }
-            disabled={sortedData.length === 0}
-          >
-            <span className="flex items-center gap-1.5">
-              <DownloadIcon />
-              JSON
-            </span>
-          </Button>
-        </div>
-      </div>
-
-      {/* Main table */}
-      <Table<UsageDataPoint>
-        columns={columns}
-        data={sortedData}
-        keyExtractor={(row) => row.group_key}
-        loading={isDataLoading}
-        emptyMessage="No usage data for the selected time range"
-      />
-
-      {/* Bottom row - Top by Tokens + Token Distribution */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-        <div className="bg-bg-secondary rounded-xl border border-border p-6">
-          <h3 className="text-sm font-semibold text-text-primary mb-4">Top by Tokens</h3>
-          <HorizontalBar
-            items={top5.map((d) => ({
-              label: groupDisplayValue(d),
-              value: d.total_tokens,
-              detail: formatTokens(d.total_tokens),
-            }))}
+          {/* Main table (Table scrolls horizontally inside its own container) */}
+          <Table<UsageDataPoint>
+            columns={columns}
+            data={sortedData}
+            keyExtractor={(row) => row.group_key}
+            loading={isDataLoading}
+            emptyState={noData}
           />
-        </div>
 
-        <div className="bg-bg-secondary rounded-xl border border-border p-6">
-          <h3 className="text-sm font-semibold text-text-primary mb-4">Token Distribution</h3>
-          <DonutChart
-            segments={[
-              { label: 'Prompt', value: totalPrompt, color: '#8b5cf6' },
-              { label: 'Completion', value: totalCompletion, color: '#25252d' },
-            ]}
-            centerLabel="Total"
-            centerValue={formatTokens(totalPrompt + totalCompletion)}
-          />
-        </div>
-      </div>
-    </>
+          {/* Bottom row - Top by Tokens + Token Distribution */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+            <Card className="min-w-0">
+              <CardHeader title="Top by Tokens" />
+              {isDataLoading ? (
+                <Skeleton className="h-40 w-full rounded-lg" />
+              ) : top5.length === 0 ? (
+                noData
+              ) : (
+                <HorizontalBar
+                  items={top5.map((d) => ({
+                    label: groupDisplayValue(d),
+                    value: d.total_tokens,
+                    detail: formatTokens(d.total_tokens),
+                  }))}
+                />
+              )}
+            </Card>
+
+            <Card className="min-w-0">
+              <CardHeader title="Token Distribution" />
+              {isDataLoading ? (
+                <div className="flex justify-center">
+                  <Skeleton className="w-48 h-48 rounded-full" />
+                </div>
+              ) : totalPrompt + totalCompletion === 0 ? (
+                noData
+              ) : (
+                <DonutChart
+                  segments={[
+                    { label: 'Prompt', value: totalPrompt, color: chartColor(1) },
+                    { label: 'Completion', value: totalCompletion, color: chartColor(0) },
+                  ]}
+                  centerLabel="Total"
+                  centerValue={formatTokens(totalPrompt + totalCompletion)}
+                />
+              )}
+            </Card>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 

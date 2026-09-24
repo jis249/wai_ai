@@ -85,3 +85,30 @@ Run migrations manually:
 ```powershell
 .\.venv\Scripts\python.exe scripts\db\migrate.py
 ```
+
+## Anthropic-compatible API
+
+WAI also speaks the Anthropic Messages API, so Claude Code, the `anthropic` SDKs and agent
+frameworks can use it directly:
+
+- `POST /v1/messages` (streaming and non-streaming, tools, images) is translated to the OpenAI chat
+  format and sent through the normal proxy, so model access, aliases, `auto` routing, guardrails,
+  rate/spend limits, fallbacks, usage logging and caching all apply.
+- `POST /v1/messages/count_tokens` returns an **estimate** (characters / 4), not a tokenizer count.
+- Auth: `x-api-key: <WAI key>` or `Authorization: Bearer <WAI key>`.
+- The Anthropic SDK base URL is the server origin **without** `/v1`:
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="https://ai.waiin.com", api_key="wa_uk_...")
+msg = client.messages.create(model="your-model", max_tokens=1024, messages=[{"role": "user", "content": "Hello"}])
+```
+
+Claude Code: `ANTHROPIC_BASE_URL=https://ai.waiin.com` plus `ANTHROPIC_API_KEY` (or
+`ANTHROPIC_AUTH_TOKEN`) set to a WAI key. The `model` must be a WAI model name or alias; create
+aliases for the Claude model ids your client sends, or set `ANTHROPIC_MODEL`.
+
+Limitations: `top_k`, `thinking`, `cache_control` and server tools (web search, etc.) are ignored;
+`stop_sequence` is always `null`; `content_filter` is reported as `stop_reason: "refusal"`; errors use
+the Anthropic `{"type": "error", "error": {...}}` shape with the original HTTP status.

@@ -3,6 +3,9 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Input } from '../components/ui/Input'
 import { Button } from '../components/ui/Button'
 import { ThemeToggle } from '../components/ui/ThemeToggle'
+import { Banner } from '../components/ui/Banner'
+import { PasswordInput } from '../components/settings/PasswordInput'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 interface InvitePeek {
   email: string
@@ -16,6 +19,7 @@ type PageState = 'loading' | 'invalid' | 'expired' | 'form' | 'success'
 export default function AcceptInvitePage() {
   const { token } = useParams<{ token: string }>()
   const navigate = useNavigate()
+  useDocumentTitle('Accept invite')
 
   const [pageState, setPageState] = useState<PageState>(() => (token ? 'loading' : 'invalid'))
   const [invite, setInvite] = useState<InvitePeek | null>(null)
@@ -120,13 +124,14 @@ export default function AcceptInvitePage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-bg-primary px-4 relative">
-      <div className="absolute top-4 right-4 w-44">
+    <main className="min-h-screen flex items-center justify-center bg-bg-primary px-4 py-12 relative">
+      <div className="absolute top-4 right-4 w-36 sm:w-44">
         <ThemeToggle compact />
       </div>
-      <div className="w-full max-w-sm bg-bg-secondary border border-border rounded-xl p-8">
+      <div className="w-full max-w-sm bg-bg-secondary border border-border rounded-xl p-6 shadow-xl sm:p-8">
         <div className="mb-8 text-center">
           <h1 className="text-3xl font-bold gradient-text">wai</h1>
+          <p className="mt-2 text-sm text-text-tertiary">Accept your invitation</p>
         </div>
 
         {pageState === 'loading' && (
@@ -184,12 +189,7 @@ export default function AcceptInvitePage() {
 
             <form onSubmit={(e) => void handleSubmit(e)} className="space-y-5" noValidate>
               <div>
-                <label className="block text-sm font-medium text-text-secondary mb-1.5">
-                  Email
-                </label>
-                <div className="block w-full rounded-md bg-bg-tertiary border border-border px-3 py-2 text-sm text-text-secondary select-none">
-                  {invite.email}
-                </div>
+                <Input label="Email" type="email" value={invite.email} readOnly autoComplete="username" />
               </div>
 
               <Input
@@ -202,9 +202,8 @@ export default function AcceptInvitePage() {
                 autoComplete="name"
               />
 
-              <Input
+              <PasswordInput
                 label="Password"
-                type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Min. 8 characters"
@@ -213,9 +212,8 @@ export default function AcceptInvitePage() {
                 autoComplete="new-password"
               />
 
-              <Input
+              <PasswordInput
                 label="Confirm Password"
-                type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Re-enter your password"
@@ -224,11 +222,7 @@ export default function AcceptInvitePage() {
                 autoComplete="new-password"
               />
 
-              {submitError !== null && (
-                <div className="rounded-lg bg-error/10 border border-error/20 px-3 py-2">
-                  <p className="text-xs text-error">{submitError}</p>
-                </div>
-              )}
+              {submitError !== null && <Banner variant="error" title={submitError} />}
 
               <Button type="submit" loading={submitting} fullWidth size="lg">
                 Accept Invite
@@ -247,6 +241,6 @@ export default function AcceptInvitePage() {
           </>
         )}
       </div>
-    </div>
+    </main>
   )
 }

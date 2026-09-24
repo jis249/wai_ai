@@ -191,3 +191,54 @@ export function useMCPServerTools(serverId: string) {
     enabled: !!serverId,
   })
 }
+
+export interface SetToolBlockedVars {
+  toolName: string
+  blocked: boolean
+}
+
+export const toolBlockMutationKey = (serverId: string) => ['mcp-tool-block', serverId] as const
+
+/**
+ * Block / unblock one tool with an optimistic update of the cached tools list.
+ * Same requests as useAddBlocklistEntry / useRemoveBlocklistEntry. On error only the
+ * affected tool is rolled back, so concurrent toggles on other tools are preserved.
+ */
+export function useSetToolBlocked(serverId: string) {
+  const queryClient = useQueryClient()
+  const toolsKey = ['mcp-server-tools', serverId]
+  const setBlocked = (toolName: string, blocked: boolean) =>
+    queryClient.setQueryData<MCPToolResponse[]>(toolsKey, (old) =>
+      old?.map((t) => (t.name === toolName ? { ...t, blocked } : t)),
+    )
+  return useMutation<unknown, Error, SetToolBlockedVars, { previous: boolean | undefined }>({
+    mutationKey: toolBlockMutationKey(serverId),
+    mutationFn: ({ toolName, blocked }) =>
+      blocked
+        ? apiClient<ToolBlocklistEntry>(`/mcp-servers/${serverId}/blocklist`, {
+            method: 'POST',
+            body: JSON.stringify({ tool_name: toolName, reason: '' }),
+          })
+        : apiClient<void>(`/mcp-servers/${serverId}/blocklist?tool_name=${encodeURIComponent(toolName)}`, {
+            method: 'DELETE',
+          }),
+    onMutate: async ({ toolName, blocked }) => {
+      await queryClient.cancelQueries({ queryKey: toolsKey })
+      const previous = queryClient
+        .getQueryData<MCPToolResponse[]>(toolsKey)
+        ?.find((t) => t.name === toolName)?.blocked
+      setBlocked(toolName, blocked)
+      return { previous }
+    },
+    onError: (_err, { toolName }, context) => {
+      if (context?.previous !== undefined) setBlocked(toolName, context.previous)
+    },
+    onSettled: () => {
+      // Refetch once the last in-flight toggle settles so a refetch can't clobber
+      // another optimistic change (this mutation still counts while settling).
+      if (queryClient.isMutating({ mutationKey: toolBlockMutationKey(serverId) }) > 1) return
+      queryClient.invalidateQueries({ queryKey: ['mcp-server-blocklist', serverId] })
+      queryClient.invalidateQueries({ queryKey: toolsKey })
+    },
+  })
+}

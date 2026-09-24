@@ -5,8 +5,8 @@ import { cn } from '../../lib/utils'
 const iconColorMap: Record<string, { bg: string; text: string }> = {
   purple: { bg: 'bg-accent/10', text: 'text-accent' },
   green:  { bg: 'bg-success/10', text: 'text-success' },
-  pink:   { bg: 'bg-pink-500/10', text: 'text-pink-400' },
-  blue:   { bg: 'bg-blue-500/10', text: 'text-blue-400' },
+  pink:   { bg: 'bg-chart-4/10', text: 'text-chart-4' },
+  blue:   { bg: 'bg-chart-5/10', text: 'text-chart-5' },
   yellow: { bg: 'bg-warning/10', text: 'text-warning' },
   red:    { bg: 'bg-error/10', text: 'text-error' },
 }
@@ -24,6 +24,12 @@ function trendPrefix(value: number): string {
   if (value > 0) return '▲'
   if (value < 0) return '▼'
   return '—'
+}
+
+function trendSrText(value: number): string {
+  if (value > 0) return 'Up'
+  if (value < 0) return 'Down'
+  return 'No change'
 }
 
 function trendColorClass(value: number): string {
@@ -50,7 +56,7 @@ export function StatCard({ label, value, icon, trend, iconColor, className, ...r
         className="pointer-events-none absolute inset-x-0 top-0 h-24"
         style={{
           background:
-            'linear-gradient(180deg, rgba(139,92,246,0.04) 0%, transparent 100%)',
+            'linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 5%, transparent) 0%, transparent 100%)',
         }}
         aria-hidden="true"
       />
@@ -74,8 +80,10 @@ export function StatCard({ label, value, icon, trend, iconColor, className, ...r
         <div className="text-sm text-text-tertiary mt-1">{label}</div>
 
         {trend != null ? (
-          <div className={cn('text-sm mt-2', trendColorClass(trend.value))}>
-            {trendPrefix(trend.value)}{trend.label != null ? ` ${trend.label}` : ` ${Math.abs(trend.value)}`}
+          <div data-slot="trend" className={cn('text-sm mt-2', trendColorClass(trend.value))}>
+            <span aria-hidden="true">{trendPrefix(trend.value)}</span>
+            <span className="sr-only">{trendSrText(trend.value)}</span>
+            {trend.label != null ? ` ${trend.label}` : ` ${Math.abs(trend.value)}`}
           </div>
         ) : null}
       </div>

@@ -2,17 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import random
 import time
 from typing import Any
 
 import httpx
 from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
+from starlette.background import BackgroundTask
 
 from wai.api.admin.common import KEY_INFO_CTX, KeyInfo, api_error
-from wai.metrics import observe_proxy_request
+from wai.config.models import ReliabilityConfig
+from wai.metrics import observe_fallback, observe_proxy_request, observe_retry
+from wai.proxy.circuit import (
+    CircuitRegistry,
+    circuit_key,
+    is_failure_status,
+    retry_after_from_headers,
+    set_active_registry,
+)
 from wai.proxy.access import AliasCache, ModelAccessCache
 from wai.proxy.auto_router import (
     AUTO_MODEL_NAME,
@@ -24,7 +35,7 @@ from wai.proxy.auto_router import (
 from wai.proxy.providers import get_adapter
 from wai.proxy.registry import ERR_MODEL_NOT_FOUND, Model, Registry
 from wai.proxy.guardrail import apply_org_guardrails
-from wai.proxy.response_cache import ResponseCache
+from wai.proxy.response_cache import ResponseCache, cache_bypass_requested
 from wai.proxy.routing import (
     RETRYABLE_STATUS,
     apply_deployment,
@@ -58,6 +69,42 @@ def is_allowed_path(path: str) -> bool:
     return p.startswith("images/") or p.startswith("audio/") or p.startswith("models/")
 
 
+_ERROR_MESSAGE_MAX = 500
+_STREAM_ERROR_BODY_MAX = 64 * 1024
+
+
+def _error_message(content: bytes | None) -> str:
+    """Extract a short error message from an upstream error body (OpenAI shape or raw)."""
+    if not content:
+        return ""
+    text = content.decode("utf-8", errors="replace")
+    try:
+        doc = json.loads(text)
+    except json.JSONDecodeError:
+        doc = None
+    if isinstance(doc, dict):
+        err = doc.get("error")
+        if isinstance(err, dict) and isinstance(err.get("message"), str):
+            text = err["message"]
+        elif isinstance(err, str):
+            text = err
+        elif isinstance(doc.get("message"), str):
+            text = doc["message"]
+    text = " ".join(text.split())
+    return text[:_ERROR_MESSAGE_MAX]
+
+
+def request_timeout(model: Model) -> httpx.Timeout | Any:
+    """Per-model upstream timeout, or the client default when the model sets none."""
+    try:
+        seconds = model.timeout.total_seconds() if model.timeout else 0.0
+    except AttributeError:
+        seconds = float(model.timeout or 0)
+    if seconds > 0:
+        return httpx.Timeout(seconds, connect=min(10.0, seconds))
+    return httpx.USE_CLIENT_DEFAULT
+
+
 def mutate_request_body(body: bytes, canonical_model: str, inject_usage: bool) -> bytes:
     try:
         doc = json.loads(body)
@@ -85,6 +132,8 @@ class ProxyHandler:
         fallback_max_depth: int = 0,
         health_checker: Any = None,
         rate_limiter: Any = None,
+        reliability: ReliabilityConfig | None = None,
+        circuits: CircuitRegistry | None = None,
     ) -> None:
         self.registry = registry
         self.access_cache = access_cache
@@ -99,6 +148,18 @@ class ProxyHandler:
         self.rate_limiter = rate_limiter
         self.response_cache = ResponseCache()
         self._inflight: dict[str, int] = {}
+        self.reliability = reliability or (circuits.settings if circuits is not None else ReliabilityConfig())
+        self.circuits = circuits or CircuitRegistry(self.reliability)
+        # Publish for the admin API (/models/health) and let the health checker feed it.
+        set_active_registry(self.circuits)
+        if health_checker is not None:
+            try:
+                health_checker.circuits = self.circuits
+            except Exception:
+                pass
+        self._sleep = asyncio.sleep
+        self._clock = time.monotonic
+        self._rng = random.Random()
         self.auto_router = AutoRouter(auto_router_config or AutoRouterConfig(), log=self.log)
         self._client = httpx.AsyncClient(
             follow_redirects=False,
@@ -108,6 +169,88 @@ class ProxyHandler:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    # -- reliability helpers ------------------------------------------------------
+
+    @staticmethod
+    def _dep_key(model: Model, dep: Any) -> str:
+        return circuit_key(model.name, dep.name if dep else "", (dep.base_url if dep else "") or model.base_url)
+
+    def _model_targets(self, model: Model) -> list[str]:
+        deps = [d for d in model.deployments if d.base_url]
+        if deps:
+            return [self._dep_key(model, d) for d in deps]
+        return [circuit_key(model.name, "", model.base_url)]
+
+    def _model_admitted(self, model: Model) -> bool:
+        return any(self.circuits.allows(k) for k in self._model_targets(model))
+
+    def _retry_budget(self, model: Model) -> float:
+        """Total time retries may consume: the model timeout, else the configured budget."""
+        try:
+            seconds = model.timeout.total_seconds() if model.timeout else 0.0
+        except AttributeError:
+            seconds = float(model.timeout or 0)
+        if seconds > 0:
+            return seconds
+        return max(float(self.reliability.retry_budget_seconds or 0), 0.0)
+
+    def _backoff(self, attempt: int) -> float:
+        base = max(float(self.reliability.retry_backoff_base_ms or 0), 0.0) / 1000.0
+        cap = max(float(self.reliability.retry_backoff_max_ms or 0), 0.0) / 1000.0
+        ceiling = min(cap, base * (2 ** min(attempt, 16)))
+        # "Equal jitter": at least half the step, so retries never stampede.
+        return ceiling / 2 + self._rng.uniform(0, ceiling / 2)
+
+    def _retry_delay(
+        self,
+        model: Model,
+        attempt: int,
+        failed: set[str],
+        retry_after: float | None,
+    ) -> float | None:
+        """Seconds to wait before the next attempt, or None to give up on this model.
+
+        When another untried, admitted deployment exists, just back off briefly and
+        switch. When the retry would hit the same upstream again, honour Retry-After up
+        to ``retry_after_max_seconds``; a longer Retry-After means move to the next model.
+        """
+        alternatives = [
+            d
+            for d in model.deployments
+            if d.base_url and d.base_url not in failed and self.circuits.allows(self._dep_key(model, d))
+        ]
+        backoff = self._backoff(attempt)
+        if alternatives or retry_after is None:
+            return backoff
+        limit = max(float(self.reliability.retry_after_max_seconds or 0), 0.0)
+        if retry_after > limit:
+            return None
+        return max(retry_after, backoff)
+
+    def _settle_response(self, key: str, ticket: str, resp: Any) -> None:
+        """Record a returned response's outcome against the deployment circuit."""
+        headers = getattr(resp, "headers", None)
+        try:
+            cache_hit = headers is not None and headers.get("x-wai-cache") == "HIT"
+        except Exception:
+            cache_hit = False
+        if cache_hit:
+            self.circuits.release(key, ticket)
+            return
+        status = int(getattr(resp, "status_code", 200) or 200)
+        if is_failure_status(status):
+            self.circuits.record_failure(
+                key,
+                ticket,
+                retry_after=retry_after_from_headers(headers) if status == 429 else None,
+                reason=f"upstream status {status}",
+            )
+        elif 400 <= status < 500:
+            # Client errors say nothing about upstream health (same as the exception path).
+            self.circuits.release(key, ticket)
+        else:
+            self.circuits.record_success(key, ticket)
 
     async def handle(self, request: Request, path: str) -> Response:
         started = time.perf_counter()
@@ -162,16 +305,45 @@ class ProxyHandler:
             healthy = [m for m in chain if not self.health_checker.is_unhealthy(m.name)]
             if healthy:
                 chain = healthy
+        if self.circuits.enabled and len(chain) > 1:
+            # Skip fallback-chain models whose every target has an open circuit,
+            # unless that would leave nothing to try.
+            live = [m for m in chain if self._model_admitted(m)]
+            if live:
+                chain = live
         last_exc: Exception | None = None
+        last_model: Model = model
+        clock_start = self._clock()
         for idx, candidate in enumerate(chain):
-            deployed = apply_deployment(candidate, select_deployment(candidate, inflight=self._inflight))
             retries = max(int(candidate.max_retries or 0), 0)
             attempts = retries + 1
-            inflight_key = deployed.base_url or deployed.name
+            failed: set[str] = set()
+            deadline = clock_start + self._retry_budget(candidate)
             for attempt in range(attempts):
+                # Reselect per attempt so retries move off deployments that already failed
+                # and off deployments whose circuit is open.
+                dep = select_deployment(
+                    candidate,
+                    inflight=self._inflight,
+                    exclude=failed,
+                    allow=lambda d, c=candidate: self.circuits.allows(self._dep_key(c, d)),
+                    last_failure=lambda d, c=candidate: self.circuits.last_failure_at(self._dep_key(c, d)),
+                )
+                deployed = apply_deployment(candidate, dep)
+                last_model = deployed
+                ckey = circuit_key(candidate.name, dep.name if dep else "", deployed.base_url)
+                ticket = self.circuits.acquire(
+                    ckey,
+                    model=candidate.name,
+                    deployment=dep.name if dep else "",
+                    base_url=(deployed.base_url or "").rstrip("/"),
+                )
+                settled = False
+                inflight_key = deployed.base_url or deployed.name
                 self._inflight[inflight_key] = self._inflight.get(inflight_key, 0) + 1
+                retry_after: float | None = None
                 try:
-                    return await self._forward(
+                    resp = await self._forward(
                         request,
                         body=body,
                         model=deployed,
@@ -182,15 +354,40 @@ class ProxyHandler:
                         requested_model_name=requested_model_name,
                         started=started,
                         extra_headers=extra_headers,
+                        circuit_key=ckey,
                     )
+                    self._settle_response(ckey, ticket, resp)
+                    settled = True
+                    return resp
                 except (httpx.RequestError, httpx.HTTPStatusError) as exc:
                     last_exc = exc
+                    if deployed.base_url:
+                        failed.add(deployed.base_url)
                     body_preview = b""
+                    reason = "network"
                     if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+                        status = exc.response.status_code
                         body_preview = exc.response.content or b""
-                        if is_context_window_error(exc.response.status_code, body_preview):
+                        retry_after = retry_after_from_headers(exc.response.headers)
+                        reason = f"status_{status}"
+                        if is_failure_status(status):
+                            self.circuits.record_failure(
+                                ckey,
+                                ticket,
+                                retry_after=retry_after if status in (429, 503) else None,
+                                reason=f"upstream status {status}",
+                            )
+                        else:
+                            self.circuits.release(ckey, ticket)
+                        settled = True
+                        if is_context_window_error(status, body_preview):
                             self.log.info("context-window fallback from %s", deployed.name)
                             break
+                    else:
+                        self.circuits.record_failure(
+                            ckey, ticket, reason=f"{type(exc).__name__}: {exc}"
+                        )
+                        settled = True
                     self.log.warning(
                         "upstream error model=%s attempt=%s: %s",
                         deployed.name,
@@ -203,12 +400,46 @@ class ProxyHandler:
                         duration_seconds=time.perf_counter() - started,
                         error=True,
                     )
+                    if attempt + 1 >= attempts:
+                        continue
+                    delay = self._retry_delay(candidate, attempt, failed, retry_after)
+                    if delay is None:
+                        self.log.info(
+                            "retry-after %.1fs from %s exceeds limit; moving on",
+                            retry_after or 0.0,
+                            deployed.name,
+                        )
+                        break
+                    if self._clock() + delay >= deadline:
+                        self.log.info("retry budget exhausted for %s", candidate.name)
+                        break
+                    observe_retry(candidate.name, reason)
+                    if delay > 0:
+                        await self._sleep(delay)
                     continue
                 finally:
                     self._inflight[inflight_key] = max(0, self._inflight.get(inflight_key, 1) - 1)
+                    if not settled:
+                        self.circuits.release(ckey, ticket)
             if idx < len(chain) - 1:
+                observe_fallback(candidate.name)
                 self.log.info("falling back from %s to %s", candidate.name, chain[idx + 1].name)
 
+        err_msg = str(last_exc) if last_exc else "upstream unavailable"
+        if isinstance(last_exc, httpx.HTTPStatusError) and last_exc.response is not None:
+            err_msg = f"upstream status {last_exc.response.status_code}: " + _error_message(
+                last_exc.response.content
+            )
+        self._log_error(
+            key_info,
+            last_model,
+            status_code=502,
+            error=err_msg,
+            started=started,
+            request_id=getattr(request.state, "request_id", "") or "",
+            requested_model_name=requested_model_name,
+            upstream_path=upstream_path,
+        )
         raise api_error(502, "bad_gateway", str(last_exc) if last_exc else "upstream unavailable")
 
     async def _forward(
@@ -224,6 +455,7 @@ class ProxyHandler:
         requested_model_name: str,
         started: float,
         extra_headers: dict[str, str],
+        circuit_key: str = "",
     ) -> Response:
         adapter = get_adapter(model.provider)
         needs_model_replace = original_model_name != model.name
@@ -249,8 +481,11 @@ class ProxyHandler:
             not stream
             and method == "POST"
             and upstream_path in {"chat/completions", "completions", "embeddings"}
+            and not cache_bypass_requested(request.headers)
         ):
-            cache_key = self.response_cache.make_key(model.name, fwd_body)
+            # Tenant-scoped: identical bodies from different orgs never share entries.
+            cache_scope = key_info.org_id if key_info is not None else ""
+            cache_key = self.response_cache.make_key(model.name, fwd_body, scope=cache_scope)
             cached = self.response_cache.get(cache_key)
             if cached is not None:
                 content, status_code, cached_headers = cached
@@ -289,9 +524,17 @@ class ProxyHandler:
                 request_id=request_id,
                 started=started,
                 extra_headers=extra_headers,
+                upstream_path=upstream_path,
+                circuit_key=circuit_key,
             )
 
-        resp = await self._client.request(method, upstream_url, content=fwd_body, headers=headers)
+        resp = await self._client.request(
+            method,
+            upstream_url,
+            content=fwd_body,
+            headers=headers,
+            timeout=request_timeout(model),
+        )
         if resp.status_code in RETRYABLE_STATUS:
             observe_proxy_request(
                 model=model.name,
@@ -346,6 +589,17 @@ class ProxyHandler:
                 duration_seconds=duration_s,
                 error=resp.status_code >= 400,
             )
+            if not 200 <= resp.status_code < 300:
+                self._log_error(
+                    key_info,
+                    model,
+                    status_code=resp.status_code,
+                    error=_error_message(content),
+                    started=started,
+                    request_id=request_id,
+                    requested_model_name=requested_model_name,
+                    upstream_path=upstream_path,
+                )
 
         return Response(
             content=content,
@@ -476,37 +730,60 @@ class ProxyHandler:
         request_id: str,
         started: float,
         extra_headers: dict[str, str] | None = None,
+        upstream_path: str = "chat/completions",
+        circuit_key: str = "",
     ) -> StreamingResponse:
+        # Open the upstream stream (send + status/headers) before returning, so that
+        # connection errors and retryable statuses surface to the retry/fallback loop in
+        # handle(). Once bytes flow to the client there is no retry.
+        upstream_req = self._client.build_request(
+            method, url, content=body, headers=headers, timeout=request_timeout(model)
+        )
+        resp = await self._client.send(upstream_req, stream=True)
+        status_code = resp.status_code
+        error_body = b""
+        if not 200 <= status_code < 300:
+            try:
+                error_body = await self._read_capped(resp, _STREAM_ERROR_BODY_MAX)
+            finally:
+                await resp.aclose()
+            if status_code in RETRYABLE_STATUS:
+                observe_proxy_request(
+                    model=model.name,
+                    status_code=status_code,
+                    duration_seconds=time.perf_counter() - started,
+                    error=True,
+                )
+                raise httpx.HTTPStatusError(
+                    "retryable upstream status",
+                    request=upstream_req,
+                    response=httpx.Response(
+                        status_code,
+                        # Body is already decoded; drop content-encoding/length headers.
+                        headers={
+                            k: v
+                            for k, v in resp.headers.items()
+                            if k.lower() in ("retry-after", "retry-after-ms", "content-type")
+                        },
+                        content=error_body,
+                        request=upstream_req,
+                    ),
+                )
+
         usage = UsageInfo()
         ttft_ms: int | None = None
-        status_code = 200
         first_chunk = True
+        stream_error = ""
+        finalized = False
 
-        async def event_generator():
-            nonlocal usage, ttft_ms, status_code, first_chunk
-            async with self._client.stream(method, url, content=body, headers=headers) as resp:
-                status_code = resp.status_code
-                async for line in resp.aiter_lines():
-                    chunk = (line + "\n").encode()
-                    if first_chunk and line.startswith("data: "):
-                        ttft_ms = int((time.perf_counter() - started) * 1000)
-                        first_chunk = False
-                    if adapter is not None:
-                        out = adapter.transform_stream_line(chunk)
-                        if out is None:
-                            continue
-                        chunk = out
-                    usage = observe_stream_usage_line(chunk, usage)
-                    yield chunk
-
-        async def wrapped_generator():
-            async for chunk in event_generator():
-                yield chunk
-            if (
-                self.usage_logger is not None
-                and key_info is not None
-                and 200 <= status_code < 300
-            ):
+        def finalize() -> None:
+            nonlocal finalized
+            if finalized:
+                return
+            finalized = True
+            if self.usage_logger is None or key_info is None:
+                return
+            if 200 <= status_code < 300:
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 self._log_usage(
                     key_info,
@@ -518,12 +795,90 @@ class ProxyHandler:
                     request_id=request_id,
                     requested_model_name=requested_model_name,
                 )
+            else:
+                self._log_error(
+                    key_info,
+                    model,
+                    status_code=status_code or 502,
+                    error=stream_error or _error_message(error_body[:_ERROR_MESSAGE_MAX]),
+                    started=started,
+                    request_id=request_id,
+                    requested_model_name=requested_model_name,
+                    upstream_path=upstream_path,
+                )
 
+        async def close_upstream() -> None:
+            try:
+                await resp.aclose()
+            except Exception:
+                pass
+
+        async def event_generator():
+            nonlocal usage, ttft_ms, first_chunk
+            if not 200 <= status_code < 300:
+                # Non-retryable upstream error (e.g. 400/401): relay its body once.
+                if error_body:
+                    yield error_body
+                return
+            async for line in resp.aiter_lines():
+                chunk = (line + "\n").encode()
+                if first_chunk and line.startswith("data: "):
+                    ttft_ms = int((time.perf_counter() - started) * 1000)
+                    first_chunk = False
+                if adapter is not None:
+                    out = adapter.transform_stream_line(chunk)
+                    if out is None:
+                        continue
+                    chunk = out
+                usage = observe_stream_usage_line(chunk, usage)
+                yield chunk
+
+        async def wrapped_generator():
+            nonlocal stream_error
+            try:
+                async for chunk in event_generator():
+                    yield chunk
+            except httpx.RequestError as exc:
+                stream_error = f"upstream stream error: {exc}"
+                self.log.warning("upstream stream error model=%s: %s", model.name, exc)
+                if circuit_key:
+                    self.circuits.record_failure(circuit_key, reason=stream_error)
+                raise
+            finally:
+                # Runs on normal completion, upstream failure, and client disconnect
+                # (GeneratorExit / cancellation), so partial usage is not lost.
+                await close_upstream()
+                finalize()
+
+        async def after_response() -> None:
+            # Safety net if the body iterator never started (client gone before the
+            # first chunk): release the upstream connection and still log once.
+            await close_upstream()
+            finalize()
+
+        if 200 <= status_code < 300:
+            return StreamingResponse(
+                wrapped_generator(),
+                media_type="text/event-stream",
+                headers=extra_headers or None,
+                background=BackgroundTask(after_response),
+            )
         return StreamingResponse(
             wrapped_generator(),
-            media_type="text/event-stream",
+            status_code=status_code,
+            media_type=resp.headers.get("content-type") or "application/json",
             headers=extra_headers or None,
+            background=BackgroundTask(after_response),
         )
+
+    @staticmethod
+    async def _read_capped(resp: httpx.Response, limit: int) -> bytes:
+        buf = bytearray()
+        async for part in resp.aiter_bytes():
+            buf.extend(part)
+            if len(buf) >= limit:
+                break
+        return bytes(buf[:limit])
 
     def _log_usage(
         self,
@@ -537,6 +892,7 @@ class ProxyHandler:
         request_id: str,
         requested_model_name: str,
         cache_hit: bool = False,
+        error: str = "",
     ) -> None:
         if self.usage_logger is None:
             return
@@ -572,6 +928,7 @@ class ProxyHandler:
                 status_code=status_code,
                 request_id=request_id,
                 cache_hit=cache_hit,
+                error=error,
             )
         )
         limiter = self.rate_limiter
@@ -583,6 +940,43 @@ class ProxyHandler:
                 loop.create_task(limiter.check_token_usage(key_info, usage.total_tokens))
             except RuntimeError:
                 pass
+
+    def _log_error(
+        self,
+        key_info: KeyInfo | None,
+        model: Model,
+        *,
+        status_code: int,
+        error: str,
+        started: float,
+        request_id: str,
+        requested_model_name: str,
+        upstream_path: str,
+    ) -> None:
+        """Record a failed (non-2xx) proxied request in request_logs."""
+        if self.usage_logger is None or key_info is None:
+            return
+        if upstream_path not in {"chat/completions", "completions", "embeddings"}:
+            return
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        self.log.warning(
+            "proxy request failed model=%s status=%s request_id=%s: %s",
+            model.name,
+            status_code,
+            request_id,
+            error,
+        )
+        self._log_usage(
+            key_info,
+            model,
+            UsageInfo(),
+            duration_ms=duration_ms,
+            ttft_ms=duration_ms,
+            status_code=status_code,
+            request_id=request_id,
+            requested_model_name=requested_model_name,
+            error=error[:_ERROR_MESSAGE_MAX] or f"upstream status {status_code}",
+        )
 
     @staticmethod
     def _filter_response_headers(headers: httpx.Headers) -> dict[str, str]:

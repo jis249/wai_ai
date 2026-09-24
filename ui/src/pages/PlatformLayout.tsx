@@ -1,12 +1,12 @@
 import { Navigate, Outlet } from 'react-router-dom'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Tabs } from '../components/ui/Tabs'
-import { useMe } from '../hooks/useMe'
+import { usePermissions } from '../hooks/usePermissions'
 
 export default function PlatformLayout() {
-  const { data: me, isLoading } = useMe()
-  if (isLoading) return null
-  if (!me?.is_system_admin && me?.role !== 'system_admin') {
+  const { isReady, isSystemAdmin } = usePermissions()
+  if (!isReady) return null
+  if (!isSystemAdmin) {
     return <Navigate to="/" replace />
   }
 

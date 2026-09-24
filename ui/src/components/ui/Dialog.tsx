@@ -1,7 +1,8 @@
-import React, { useEffect, useId, useRef } from 'react'
+import React, { useId } from 'react'
 import ReactDOM from 'react-dom'
 import { cn } from '../../lib/utils'
 import { Button } from './Button'
+import { useModalBehavior } from './useModalBehavior'
 
 export interface DialogProps {
   open: boolean
@@ -25,48 +26,7 @@ export function Dialog({
   closeOnBackdrop = true,
 }: DialogProps) {
   const titleId = useId()
-  const panelRef = useRef<HTMLDivElement>(null)
-  const previousFocusRef = useRef<Element | null>(null)
-
-  // Escape key closes dialog — respects nested consumers via defaultPrevented
-  useEffect(() => {
-    if (!open) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented && closeOnEscape) {
-        e.preventDefault()
-        onClose()
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [open, onClose, closeOnEscape])
-
-  // Focus management: save previous focus, focus first focusable on open, restore on close
-  useEffect(() => {
-    if (open) {
-      previousFocusRef.current = document.activeElement
-      const rafId = requestAnimationFrame(() => {
-        const focusable = panelRef.current?.querySelectorAll<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-        )
-        focusable?.[0]?.focus()
-      })
-      return () => cancelAnimationFrame(rafId)
-    } else if (previousFocusRef.current instanceof HTMLElement) {
-      previousFocusRef.current.focus()
-      previousFocusRef.current = null
-    }
-  }, [open])
-
-  // Lock body scroll while dialog is open
-  useEffect(() => {
-    if (!open) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [open])
+  const { panelRef, handlePanelKeyDown } = useModalBehavior({ open, onClose, closeOnEscape })
 
   if (!open) return null
 
@@ -74,26 +34,9 @@ export function Dialog({
     if (closeOnBackdrop && e.target === e.currentTarget) onClose()
   }
 
-  const handlePanelKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key !== 'Tab') return
-    const focusable = panelRef.current?.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-    )
-    if (!focusable?.length) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault()
-      last.focus()
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault()
-      first.focus()
-    }
-  }
-
   return ReactDOM.createPortal(
     <div
-      className="dialog-overlay fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm"
+      className="dialog-overlay fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
       onMouseDown={handleBackdropMouseDown}
     >
       <div
@@ -101,16 +44,17 @@ export function Dialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="dialog-panel rounded-2xl shadow-2xl max-w-xl w-full mx-4 p-6 border border-border border-t-accent/15 max-h-[90vh] flex flex-col backdrop-blur-xl"
+        className="dialog-panel rounded-2xl shadow-2xl w-full max-w-[calc(100vw-2rem)] sm:max-w-xl p-4 sm:p-6 border border-border border-t-accent/15 max-h-[calc(100dvh-2rem)] sm:max-h-[90vh] flex flex-col backdrop-blur-xl"
         onKeyDown={handlePanelKeyDown}
       >
-        <div className="flex items-center justify-between mb-4">
-          <h2 id={titleId} className="text-lg font-semibold text-text-primary">
+        <div className="flex shrink-0 items-center justify-between gap-4 mb-4">
+          <h2 id={titleId} className="min-w-0 break-words text-lg font-semibold text-text-primary">
             {title}
           </h2>
           <button
+            type="button"
             onClick={onClose}
-            className="text-text-tertiary hover:text-text-primary transition-colors cursor-pointer"
+            className="shrink-0 text-text-tertiary hover:text-text-primary transition-colors cursor-pointer"
             aria-label="Close"
           >
             <svg
@@ -119,6 +63,7 @@ export function Dialog({
               viewBox="0 0 24 24"
               stroke="currentColor"
               strokeWidth={2}
+              aria-hidden="true"
             >
               <path
                 strokeLinecap="round"
@@ -130,11 +75,11 @@ export function Dialog({
         </div>
 
         <div
-          className={cn('flex-1 overflow-y-auto', className)}
+          className={cn('min-h-0 flex-1 overflow-y-auto', className)}
           style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.15) transparent' }}
         >{children}</div>
 
-        {footer != null && <div className="mt-6">{footer}</div>}
+        {footer != null && <div className="mt-4 shrink-0 sm:mt-6">{footer}</div>}
       </div>
     </div>,
     document.body,

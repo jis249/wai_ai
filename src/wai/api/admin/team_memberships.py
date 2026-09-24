@@ -72,6 +72,11 @@ async def create_team_membership(
         raise bad_request("user_id is required")
     if body.role not in VALID_ROLES:
         raise bad_request('role must be "team_admin" or "member"')
+    # Only members of the team's org may join it (no cross-tenant team membership).
+    try:
+        await repo.get_user_org_role(h.db, body.user_id, team["org_id"])
+    except repo.NotFoundError:
+        raise bad_request("user is not a member of this organization")
     try:
         m = await repo.create_team_membership(h.db, team["id"], body.user_id, body.role)
     except repo.ConflictError:
@@ -124,6 +129,7 @@ async def update_team_membership(
         raise not_found("team membership not found")
     except Exception:
         raise internal_error("failed to update team membership")
+    await h.refresh_keys(user_id=existing["user_id"], team_id=team["id"])
     return _mem_resp(m)
 
 
@@ -145,4 +151,5 @@ async def delete_team_membership(
         raise not_found("team membership not found")
     except Exception:
         raise internal_error("failed to delete team membership")
+    await h.refresh_keys(user_id=existing["user_id"], team_id=team["id"])
     return Response(status_code=status.HTTP_204_NO_CONTENT)

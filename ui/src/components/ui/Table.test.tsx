@@ -189,7 +189,7 @@ describe('Table', () => {
       expect(onSort).not.toHaveBeenCalled()
     })
 
-    it('active sort column shows ↑ for asc direction', () => {
+    it('active sort column shows the up arrow for asc direction', () => {
       const sortableColumns: Column<TestRow>[] = [
         { key: 'name', header: 'Name', render: (r) => r.name, sortable: true },
       ]
@@ -203,10 +203,10 @@ describe('Table', () => {
         />,
       )
       const header = screen.getByRole('columnheader', { name: /name/i })
-      expect(header.textContent).toContain('↑')
+      expect(header.querySelector('svg.lucide-arrow-up')).not.toBeNull()
     })
 
-    it('active sort column shows ↓ for desc direction', () => {
+    it('active sort column shows the down arrow for desc direction', () => {
       const sortableColumns: Column<TestRow>[] = [
         { key: 'name', header: 'Name', render: (r) => r.name, sortable: true },
       ]
@@ -220,10 +220,10 @@ describe('Table', () => {
         />,
       )
       const header = screen.getByRole('columnheader', { name: /name/i })
-      expect(header.textContent).toContain('↓')
+      expect(header.querySelector('svg.lucide-arrow-down')).not.toBeNull()
     })
 
-    it('inactive sortable column shows neutral ↕ indicator', () => {
+    it('inactive sortable column shows the neutral indicator', () => {
       const sortableColumns: Column<TestRow>[] = [
         { key: 'name', header: 'Name', render: (r) => r.name, sortable: true },
         { key: 'count', header: 'Count', render: (r) => r.count, sortable: true },
@@ -239,7 +239,7 @@ describe('Table', () => {
       )
       // Count is sortable but not the active sort column — should show ↕
       const countHeader = screen.getByRole('columnheader', { name: /count/i })
-      expect(countHeader.textContent).toContain('↕')
+      expect(countHeader.querySelector('svg.lucide-chevrons-up-down')).not.toBeNull()
     })
 
     it('no sort indicators when column is not sortable and onSort is not provided', () => {
@@ -249,9 +249,7 @@ describe('Table', () => {
       )
       const headers = screen.getAllByRole('columnheader')
       headers.forEach((th) => {
-        expect(th.textContent).not.toContain('↑')
-        expect(th.textContent).not.toContain('↓')
-        expect(th.textContent).not.toContain('↕')
+        expect(th.querySelector('svg')).toBeNull()
       })
     })
 
@@ -389,8 +387,8 @@ describe('Table', () => {
       // Both the active (↑) and inactive (↕) indicators must have aria-hidden
       const nameHeader = screen.getByRole('columnheader', { name: /name/i })
       const countHeader = screen.getByRole('columnheader', { name: /count/i })
-      const activeSpan = nameHeader.querySelector('span[aria-hidden="true"]')
-      const inactiveSpan = countHeader.querySelector('span[aria-hidden="true"]')
+      const activeSpan = nameHeader.querySelector('svg[aria-hidden="true"]')
+      const inactiveSpan = countHeader.querySelector('svg[aria-hidden="true"]')
       expect(activeSpan).not.toBeNull()
       expect(inactiveSpan).not.toBeNull()
     })

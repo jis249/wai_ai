@@ -10,8 +10,8 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 
 from wai import __version__
-from wai.api.admin.common import KeyInfo, ROLE_SYSTEM_ADMIN
-from wai.api.admin.handler import get_handler, require_role
+from wai.api.admin.common import KeyInfo, ROLE_SYSTEM_ADMIN, has_role
+from wai.api.admin.handler import get_handler, optional_auth, require_role
 
 router = APIRouter()
 _OLLAMA = os.environ.get("OLLAMA_HOST", "127.0.0.1:11434").replace("http://", "").replace("https://", "")
@@ -43,8 +43,17 @@ async def _probe_ollama() -> dict[str, Any]:
     return out
 
 
-async def setup_status() -> dict[str, Any]:
-    """Public checklist for first-run / local Windows install."""
+_REDACTED_NOTE = "sign in as a system admin to view details"
+
+
+async def setup_status(request: Request) -> dict[str, Any]:
+    """Public first-run checklist.
+
+    Anonymous / non-system-admin callers get only the booleans the login/setup UI needs, with the
+    same response shape (so the page renders) but no version, Ollama URL, model names or error
+    text, and no outbound Ollama probe. Full details are returned to an authenticated system admin
+    (bearer parsed optionally; the endpoint itself stays public), or before the first user exists.
+    """
     h = get_handler()
     database_ok = False
     has_users = False
@@ -55,6 +64,19 @@ async def setup_status() -> dict[str, Any]:
         has_users = bool(row and int(row["n"]) > 0)
     except Exception:
         pass
+    key_info = await optional_auth(request)
+    is_sysadmin = key_info is not None and has_role(key_info.role, ROLE_SYSTEM_ADMIN)
+    full = is_sysadmin or (database_ok and not has_users)
+    if not full:
+        return {
+            "version": "",
+            "database": {"ok": database_ok},
+            "ollama": {"ok": False, "base_url": "", "models": [], "loaded": [], "error": _REDACTED_NOTE},
+            "has_users": has_users,
+            "proxy_base_url": "",
+            "ready": database_ok and has_users,
+            "details_redacted": True,
+        }
     ollama = await _probe_ollama()
     return {
         "version": __version__,
@@ -63,6 +85,7 @@ async def setup_status() -> dict[str, Any]:
         "has_users": has_users,
         "proxy_base_url": "http://localhost:8081/v1",
         "ready": database_ok and has_users,
+        "details_redacted": False,
     }
 
 

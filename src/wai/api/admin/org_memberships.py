@@ -11,6 +11,7 @@ from wai.api.admin.common import (
     KeyInfo,
     ROLE_ORG_ADMIN,
     ROLE_MEMBER,
+    ROLE_RANK,
     ROLE_SYSTEM_ADMIN,
     bad_request,
     conflict,
@@ -57,6 +58,29 @@ def _require_org_access(key_info: KeyInfo, org_id: str) -> None:
         raise forbidden()
 
 
+async def _guard_membership_change(h: Any, key_info: KeyInfo, existing: dict[str, Any], *, removing: bool) -> None:
+    """Non-system-admins may not modify or remove a membership whose current role is >= their own
+    rank, nor any membership of a system admin user. Self-removal (leaving the org) is allowed."""
+    is_self = bool(key_info.user_id) and key_info.user_id == existing["user_id"]
+    if not has_role(key_info.role, ROLE_SYSTEM_ADMIN) and not (removing and is_self):
+        target = await repo.get_user(h.db, existing["user_id"])
+        if target and target.get("is_system_admin"):
+            raise forbidden("cannot modify a system admin's membership")
+        target_rank = ROLE_RANK.get(existing["role"], ROLE_RANK[ROLE_SYSTEM_ADMIN])
+        if target_rank >= ROLE_RANK.get(key_info.role, -1):
+            raise forbidden("cannot modify a membership with an equal or higher role")
+
+
+async def _guard_last_org_admin(h: Any, existing: dict[str, Any], new_role: str | None, *, removing: bool) -> None:
+    """Nobody (system admins included) may demote or remove an org's last org_admin."""
+    if existing["role"] != ROLE_ORG_ADMIN:
+        return
+    if not removing and (new_role is None or new_role == ROLE_ORG_ADMIN):
+        return
+    if await repo.count_org_admins(h.db, existing["org_id"]) <= 1:
+        raise conflict("cannot demote or remove the last org_admin of an organization")
+
+
 def _mem_resp(m: dict[str, Any]) -> OrgMembershipResponse:
     return OrgMembershipResponse(
         id=m["id"], org_id=m["org_id"], user_id=m["user_id"], role=m["role"], created_at=m["created_at"]
@@ -83,6 +107,7 @@ async def create_org_membership(
         raise conflict("user is already a member of this organization")
     except Exception:
         raise internal_error("failed to create org membership")
+    await h.refresh_keys(user_id=body.user_id, org_id=org_id)
     return _mem_resp(m)
 
 
@@ -124,12 +149,15 @@ async def update_org_membership(
             raise bad_request('role must be "org_admin" or "member"')
         if not has_role(key_info.role, ROLE_SYSTEM_ADMIN) and body.role == ROLE_ORG_ADMIN:
             raise forbidden("only system admins may assign the org_admin role")
+    await _guard_membership_change(h, key_info, existing, removing=False)
+    await _guard_last_org_admin(h, existing, body.role, removing=False)
     try:
         m = await repo.update_org_membership(h.db, membership_id, body.role)
     except repo.NotFoundError:
         raise not_found("org membership not found")
     except Exception:
         raise internal_error("failed to update org membership")
+    await h.refresh_keys(user_id=existing["user_id"], org_id=org_id)
     return _mem_resp(m)
 
 
@@ -144,10 +172,14 @@ async def delete_org_membership(
     existing = await repo.get_org_membership(h.db, membership_id)
     if not existing or existing["org_id"] != org_id:
         raise not_found("org membership not found")
+    await _guard_membership_change(h, key_info, existing, removing=True)
+    await _guard_last_org_admin(h, existing, None, removing=True)
     try:
         await repo.delete_org_membership(h.db, membership_id)
     except repo.NotFoundError:
         raise not_found("org membership not found")
     except Exception:
         raise internal_error("failed to delete org membership")
+    # User/session keys of a removed member stop being loadable (repo.load_active_keys).
+    await h.refresh_keys(user_id=existing["user_id"], org_id=org_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
