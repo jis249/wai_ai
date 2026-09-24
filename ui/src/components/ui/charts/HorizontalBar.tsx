@@ -1,3 +1,5 @@
+import { CHART_CHROME } from '../../../lib/chartColors'
+
 export interface HorizontalBarItem {
   label: string
   value: number
@@ -23,7 +25,7 @@ export function HorizontalBar({ items, maxValue, color }: HorizontalBarProps) {
           ? { width: `${pct}%`, background: color, opacity }
           : {
               width: `${pct}%`,
-              background: 'linear-gradient(90deg, #6366f1, #8b5cf6)',
+              background: 'linear-gradient(90deg, var(--chart-5), var(--chart-1))',
               opacity,
             }
 
@@ -35,7 +37,7 @@ export function HorizontalBar({ items, maxValue, color }: HorizontalBarProps) {
                 <span className="text-xs text-text-tertiary shrink-0 tabular-nums">{item.detail}</span>
               )}
             </div>
-            <div className="h-2.5 rounded-full bg-[#25252d] overflow-hidden">
+            <div className="h-2.5 rounded-full overflow-hidden" style={{ background: CHART_CHROME.track }}>
               <div className="h-full rounded-full transition-all duration-500" style={barStyle} />
             </div>
           </div>

@@ -50,7 +50,7 @@ export function StatCard({ label, value, icon, trend, iconColor, className, ...r
         className="pointer-events-none absolute inset-x-0 top-0 h-24"
         style={{
           background:
-            'linear-gradient(180deg, rgba(139,92,246,0.04) 0%, transparent 100%)',
+            'linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 5%, transparent) 0%, transparent 100%)',
         }}
         aria-hidden="true"
       />

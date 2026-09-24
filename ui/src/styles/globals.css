@@ -24,6 +24,16 @@
   /* Border */
   --color-border: rgba(255, 255, 255, 0.1);
 
+  /* Chart series (utilities: bg-chart-1, text-chart-2, ...). Values live in :root / [data-theme]. */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-chart-7: var(--chart-7);
+  --color-chart-8: var(--chart-8);
+
   /* Overlays */
   --color-overlay: rgba(0, 0, 0, 0.6);
   --color-dialog-panel: rgba(11, 23, 36, 0.92);
@@ -48,6 +58,23 @@
     linear-gradient(180deg, #07111c 0%, var(--color-bg-primary) 48%, #040a12 100%);
   --selection-bg: rgba(34, 211, 238, 0.28);
   --shadow-sidebar: 12px 0 40px rgba(0, 0, 0, 0.22);
+
+  /*
+   * Categorical chart palette - fixed order, never cycled past 8 (fold extras into "Other").
+   * Dark steps validated against bg-secondary #0b1724: OKLCH L 0.48-0.67, all >= 3:1 contrast,
+   * worst adjacent CVD dE 10.1, normal-vision dE 20.3 (dataviz validate_palette.js).
+   */
+  --chart-1: #06a4c3; /* cyan (accent hue) */
+  --chart-2: #8b5cf6; /* violet */
+  --chart-3: #d97706; /* amber */
+  --chart-4: #db2777; /* pink */
+  --chart-5: #3b82f6; /* blue */
+  --chart-6: #ea580c; /* orange */
+  --chart-7: #059669; /* emerald */
+  --chart-8: #c026d3; /* fuchsia */
+  --chart-grid: rgba(255, 255, 255, 0.05);
+  --chart-cursor: rgba(255, 255, 255, 0.08);
+  --chart-track: var(--color-bg-tertiary);
 }
 
 [data-theme="light"] {
@@ -71,6 +98,18 @@
     linear-gradient(180deg, #f8fafc 0%, var(--color-bg-primary) 48%, #e8eef4 100%);
   --selection-bg: rgba(8, 145, 178, 0.22);
   --shadow-sidebar: 12px 0 32px rgba(15, 23, 42, 0.08);
+
+  /* Light steps validated against bg-secondary #ffffff: L 0.43-0.77, >= 3:1, CVD dE 10.1, normal dE 20.3. */
+  --chart-1: #0891b2;
+  --chart-2: #7c3aed;
+  --chart-3: #d97706;
+  --chart-4: #db2777;
+  --chart-5: #2563eb;
+  --chart-6: #ea580c;
+  --chart-7: #059669;
+  --chart-8: #c026d3;
+  --chart-grid: rgba(15, 23, 42, 0.08);
+  --chart-cursor: rgba(15, 23, 42, 0.08);
 }
 
 @layer base {
@@ -107,4 +146,17 @@ body {
 
 .dialog-panel {
   background: var(--color-dialog-panel);
+}
+
+/* Native date/time pickers follow the active theme (calendar icon + popup). */
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"] {
+  color-scheme: dark;
+}
+
+[data-theme="light"] input[type="date"],
+[data-theme="light"] input[type="datetime-local"],
+[data-theme="light"] input[type="time"] {
+  color-scheme: light;
 }

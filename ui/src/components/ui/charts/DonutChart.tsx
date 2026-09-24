@@ -1,7 +1,10 @@
+import { CHART_CHROME, chartColor } from '../../../lib/chartColors'
+
 export interface DonutSegment {
   label: string
   value: number
-  color: string
+  /** Segment color; defaults to the chart token at the segment's index. */
+  color?: string
 }
 
 export interface DonutChartProps {
@@ -48,7 +51,7 @@ export function DonutChart({
             cy={cy}
             r={radius}
             fill="none"
-            stroke="#25252d"
+            stroke={CHART_CHROME.track}
             strokeWidth={strokeWidth}
           />
           {renderedSegments.map(({ seg, dashArray, dashOffset, key }) => (
@@ -58,7 +61,7 @@ export function DonutChart({
               cy={cy}
               r={radius}
               fill="none"
-              stroke={seg.color}
+              stroke={seg.color ?? chartColor(key)}
               strokeWidth={strokeWidth}
               strokeDasharray={`${dashArray} ${circumference - dashArray}`}
               strokeDashoffset={dashOffset}
@@ -93,7 +96,7 @@ export function DonutChart({
               <div className="flex items-center gap-2">
                 <span
                   className="block w-2.5 h-2.5 rounded-full shrink-0"
-                  style={{ background: seg.color }}
+                  style={{ background: seg.color ?? chartColor(i) }}
                 />
                 <span className="text-text-secondary">{seg.label}</span>
               </div>

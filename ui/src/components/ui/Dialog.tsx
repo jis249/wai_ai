@@ -1,7 +1,8 @@
-import React, { useEffect, useId, useRef } from 'react'
+import React, { useId } from 'react'
 import ReactDOM from 'react-dom'
 import { cn } from '../../lib/utils'
 import { Button } from './Button'
+import { useModalBehavior } from './useModalBehavior'
 
 export interface DialogProps {
   open: boolean
@@ -25,70 +26,12 @@ export function Dialog({
   closeOnBackdrop = true,
 }: DialogProps) {
   const titleId = useId()
-  const panelRef = useRef<HTMLDivElement>(null)
-  const previousFocusRef = useRef<Element | null>(null)
-
-  // Escape key closes dialog — respects nested consumers via defaultPrevented
-  useEffect(() => {
-    if (!open) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented && closeOnEscape) {
-        e.preventDefault()
-        onClose()
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [open, onClose, closeOnEscape])
-
-  // Focus management: save previous focus, focus first focusable on open, restore on close
-  useEffect(() => {
-    if (open) {
-      previousFocusRef.current = document.activeElement
-      const rafId = requestAnimationFrame(() => {
-        const focusable = panelRef.current?.querySelectorAll<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-        )
-        focusable?.[0]?.focus()
-      })
-      return () => cancelAnimationFrame(rafId)
-    } else if (previousFocusRef.current instanceof HTMLElement) {
-      previousFocusRef.current.focus()
-      previousFocusRef.current = null
-    }
-  }, [open])
-
-  // Lock body scroll while dialog is open
-  useEffect(() => {
-    if (!open) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [open])
+  const { panelRef, handlePanelKeyDown } = useModalBehavior({ open, onClose, closeOnEscape })
 
   if (!open) return null
 
   const handleBackdropMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (closeOnBackdrop && e.target === e.currentTarget) onClose()
-  }
-
-  const handlePanelKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key !== 'Tab') return
-    const focusable = panelRef.current?.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-    )
-    if (!focusable?.length) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault()
-      last.focus()
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault()
-      first.focus()
-    }
   }
 
   return ReactDOM.createPortal(

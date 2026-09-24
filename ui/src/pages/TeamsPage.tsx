@@ -215,10 +215,6 @@ export default function TeamsPage() {
   const isOrgAdmin = me?.role === 'org_admin' || me?.role === 'system_admin'
   const canManageTeams = me?.role === 'team_admin' || isOrgAdmin
 
-  if (!meLoading && me && !canManageTeams) {
-    return <Navigate to="/" replace />
-  }
-
   const [cursor, setCursor] = useState<string | undefined>()
   const [prevCursors, setPrevCursors] = useState<string[]>([])
   const [showCreateDialog, setShowCreateDialog] = useState(false)
@@ -227,6 +223,10 @@ export default function TeamsPage() {
   const { data: teams, isLoading } = useTeams(orgId, cursor)
   const deleteTeam = useDeleteTeam(orgId)
   const { toast } = useToast()
+
+  if (!meLoading && me && !canManageTeams) {
+    return <Navigate to="/" replace />
+  }
 
   const totalMembers = (teams?.data ?? []).reduce((sum, t) => sum + t.member_count, 0)
   const totalKeys = (teams?.data ?? []).reduce((sum, t) => sum + t.key_count, 0)
