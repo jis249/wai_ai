@@ -22,6 +22,7 @@ import OrgDetailSSOTab from './pages/OrgDetailSSOTab'
 import SSOConfigPage from './pages/SSOConfigPage'
 import ServiceAccountsPage from './pages/ServiceAccountsPage'
 import ModelsLayout from './pages/ModelsLayout'
+import ModelsCatalogPage from './pages/ModelsCatalogPage'
 import ModelsAccessTab from './pages/ModelsAccessTab'
 import MCPAccessTab from './pages/MCPAccessTab'
 import SettingsPage from './pages/SettingsPage'
@@ -31,14 +32,19 @@ import LLMUsagePage from './pages/usage/LLMUsagePage'
 import MCPUsagePage from './pages/usage/MCPUsagePage'
 import AutoUsagePage from './pages/usage/AutoUsagePage'
 import CostReportsPage from './pages/CostReportsPage'
+import RequestLogsPage from './pages/usage/RequestLogsPage'
 import ProfilePage from './pages/ProfilePage'
 import AuditLogPage from './pages/AuditLogPage'
 import PlaygroundPage from './pages/PlaygroundPage'
 import SystemUsersPage from './pages/SystemUsersPage'
 import MCPServersPage from './pages/MCPServersPage'
+import MCPLayout from './pages/MCPLayout'
+import TeamAccessPanel from './pages/TeamAccessPanel'
 import SystemUsagePage from './pages/SystemUsagePage'
 import AutoRoutingPage from './pages/AutoRoutingPage'
 import SetupPage from './pages/SetupPage'
+import ApiAccessLayout from './pages/ApiAccessLayout'
+import PlatformLayout from './pages/PlatformLayout'
 import { ToastProvider } from './hooks/useToast'
 import { ThemeProvider } from './hooks/useTheme'
 import { Shell } from './components/layout/Shell'
@@ -89,7 +95,10 @@ export default function App() {
             <Route element={<RequireAuth />}>
               <Route index element={<HomeRoute />} />
               <Route path="playground" element={<PlaygroundPage />} />
-              <Route path="keys" element={<KeysPage />} />
+              <Route element={<ApiAccessLayout />}>
+                <Route path="keys" element={<KeysPage hideHeader />} />
+                <Route path="service-accounts" element={<ServiceAccountsPage hideHeader />} />
+              </Route>
               <Route path="teams" element={<TeamsPage />} />
               <Route path="teams/:teamId" element={<TeamDetailPage />}>
                 <Route index element={<Navigate to="members" replace />} />
@@ -102,24 +111,43 @@ export default function App() {
                 <Route index element={<OrgIndexRedirect />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="users" element={<OrgUsersPage />} />
-                <Route path="models" element={<ModelsAccessTab />} />
-                <Route path="mcp-access" element={<MCPAccessTab />} />
+                <Route path="sso" element={<OrgDetailSSOTab />} />
+                <Route path="audit" element={<AuditLogPage hideHeader />} />
+                <Route path="models" element={<Navigate to="/models/org-access" replace />} />
+                <Route path="mcp-access" element={<Navigate to="/mcp/org-access" replace />} />
               </Route>
-              <Route path="service-accounts" element={<ServiceAccountsPage />} />
-              <Route path="models" element={<ModelsLayout />} />
+              <Route path="models" element={<ModelsLayout />}>
+                <Route index element={<ModelsCatalogPage />} />
+                <Route path="org-access" element={<ModelsAccessTab />} />
+                <Route path="team-access" element={<TeamAccessPanel kind="models" />} />
+              </Route>
+              <Route path="mcp" element={<MCPLayout />}>
+                <Route index element={<MCPServersPage hideHeader />} />
+                <Route path="org-access" element={<MCPAccessTab />} />
+                <Route path="team-access" element={<TeamAccessPanel kind="mcp" />} />
+              </Route>
+              <Route path="mcp-servers" element={<Navigate to="/mcp" replace />} />
               <Route path="usage" element={<UsageLayout />}>
                 <Route index element={<UsageOverviewPage />} />
                 <Route path="llm" element={<LLMUsagePage />} />
                 <Route path="mcp" element={<MCPUsagePage />} />
                 <Route path="auto" element={<AutoUsagePage />} />
+                <Route path="cost" element={<CostReportsPage hideHeader />} />
+                <Route path="logs" element={<RequestLogsPage />} />
               </Route>
-              <Route path="cost-reports" element={<CostReportsPage />} />
+              <Route path="cost-reports" element={<Navigate to="/usage/cost" replace />} />
               <Route path="profile" element={<ProfilePage />} />
-              <Route path="audit-log" element={<AuditLogPage />} />
+              <Route path="audit-log" element={<Navigate to="/org/audit" replace />} />
               <Route path="sso" element={<SSOConfigPage />} />
               <Route path="orgs" element={<OrganizationsPage />} />
-              <Route path="system-usage" element={<SystemUsagePage />} />
-              <Route path="auto-routing" element={<AutoRoutingPage />} />
+              <Route path="system-usage" element={<Navigate to="/platform/host" replace />} />
+              <Route path="auto-routing" element={<Navigate to="/platform/auto-routing" replace />} />
+              <Route path="platform" element={<PlatformLayout />}>
+                <Route index element={<Navigate to="setup" replace />} />
+                <Route path="setup" element={<SetupPage embedded />} />
+                <Route path="host" element={<SystemUsagePage hideHeader />} />
+                <Route path="auto-routing" element={<AutoRoutingPage hideHeader />} />
+              </Route>
               <Route path="orgs/:orgId" element={<OrgDetailPage />}>
                 <Route index element={<Navigate to="members" replace />} />
                 <Route path="members" element={<OrgDetailMembersTab />} />
@@ -128,7 +156,6 @@ export default function App() {
                 <Route path="sso" element={<OrgDetailSSOTab />} />
               </Route>
               <Route path="users" element={<SystemUsersPage />} />
-              <Route path="mcp-servers" element={<MCPServersPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Routes>

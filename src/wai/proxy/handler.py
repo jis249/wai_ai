@@ -23,10 +23,13 @@ from wai.proxy.auto_router import (
 )
 from wai.proxy.providers import get_adapter
 from wai.proxy.registry import ERR_MODEL_NOT_FOUND, Model, Registry
+from wai.proxy.guardrail import apply_org_guardrails
+from wai.proxy.response_cache import ResponseCache
 from wai.proxy.routing import (
     RETRYABLE_STATUS,
     apply_deployment,
     fallback_depth_limit,
+    is_context_window_error,
     select_deployment,
     walk_fallback_names,
 )
@@ -80,6 +83,8 @@ class ProxyHandler:
         max_stream_duration: float = 300.0,
         auto_router_config: AutoRouterConfig | None = None,
         fallback_max_depth: int = 0,
+        health_checker: Any = None,
+        rate_limiter: Any = None,
     ) -> None:
         self.registry = registry
         self.access_cache = access_cache
@@ -90,6 +95,10 @@ class ProxyHandler:
         self.max_response_body = max_response_body
         self.max_stream_duration = max_stream_duration
         self.fallback_max_depth = fallback_max_depth
+        self.health_checker = health_checker
+        self.rate_limiter = rate_limiter
+        self.response_cache = ResponseCache()
+        self._inflight: dict[str, int] = {}
         self.auto_router = AutoRouter(auto_router_config or AutoRouterConfig(), log=self.log)
         self._client = httpx.AsyncClient(
             follow_redirects=False,
@@ -117,6 +126,12 @@ class ProxyHandler:
             raise api_error(400, "bad_request", "model field is required")
 
         key_info: KeyInfo | None = getattr(request.state, KEY_INFO_CTX, None)
+        if key_info is not None:
+            apply_org_guardrails(
+                envelope,
+                pii_enabled=bool(key_info.org_guardrail_pii),
+                tool_denylist=key_info.org_guardrail_tool_denylist,
+            )
         requested_model_name = model_name
         upstream_path = path.lstrip("/")
         if not is_allowed_path(upstream_path):
@@ -143,12 +158,18 @@ class ProxyHandler:
             lambda name: self._resolve_model(key_info, name),
             max_depth=fallback_depth_limit(self.fallback_max_depth),
         )
+        if self.health_checker is not None:
+            healthy = [m for m in chain if not self.health_checker.is_unhealthy(m.name)]
+            if healthy:
+                chain = healthy
         last_exc: Exception | None = None
         for idx, candidate in enumerate(chain):
-            deployed = apply_deployment(candidate, select_deployment(candidate))
+            deployed = apply_deployment(candidate, select_deployment(candidate, inflight=self._inflight))
             retries = max(int(candidate.max_retries or 0), 0)
             attempts = retries + 1
+            inflight_key = deployed.base_url or deployed.name
             for attempt in range(attempts):
+                self._inflight[inflight_key] = self._inflight.get(inflight_key, 0) + 1
                 try:
                     return await self._forward(
                         request,
@@ -164,6 +185,12 @@ class ProxyHandler:
                     )
                 except (httpx.RequestError, httpx.HTTPStatusError) as exc:
                     last_exc = exc
+                    body_preview = b""
+                    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+                        body_preview = exc.response.content or b""
+                        if is_context_window_error(exc.response.status_code, body_preview):
+                            self.log.info("context-window fallback from %s", deployed.name)
+                            break
                     self.log.warning(
                         "upstream error model=%s attempt=%s: %s",
                         deployed.name,
@@ -177,6 +204,8 @@ class ProxyHandler:
                         error=True,
                     )
                     continue
+                finally:
+                    self._inflight[inflight_key] = max(0, self._inflight.get(inflight_key, 1) - 1)
             if idx < len(chain) - 1:
                 self.log.info("falling back from %s to %s", candidate.name, chain[idx + 1].name)
 
@@ -215,6 +244,38 @@ class ProxyHandler:
         method = request.method.upper()
         request_id = getattr(request.state, "request_id", "") or ""
 
+        cache_key = ""
+        if (
+            not stream
+            and method == "POST"
+            and upstream_path in {"chat/completions", "completions", "embeddings"}
+        ):
+            cache_key = self.response_cache.make_key(model.name, fwd_body)
+            cached = self.response_cache.get(cache_key)
+            if cached is not None:
+                content, status_code, cached_headers = cached
+                extra_headers = {**(extra_headers or {}), **cached_headers, "X-WAI-Cache": "HIT"}
+                duration_s = time.perf_counter() - started
+                if self.usage_logger is not None and key_info is not None:
+                    usage = extract_usage(content)
+                    self._log_usage(
+                        key_info,
+                        model,
+                        usage,
+                        duration_ms=int(duration_s * 1000),
+                        ttft_ms=int(duration_s * 1000),
+                        status_code=status_code,
+                        request_id=request_id,
+                        requested_model_name=requested_model_name,
+                        cache_hit=True,
+                    )
+                return Response(
+                    content=content,
+                    status_code=status_code,
+                    headers=extra_headers,
+                    media_type=cached_headers.get("Content-Type", "application/json"),
+                )
+
         if stream:
             return await self._stream_response(
                 method,
@@ -247,6 +308,12 @@ class ProxyHandler:
             content = adapter.transform_response(content)
 
         duration_s = time.perf_counter() - started
+        out_headers = self._filter_response_headers(resp.headers)
+        if extra_headers:
+            out_headers.update(extra_headers)
+        out_headers["X-WAI-Cache"] = "MISS"
+        if cache_key:
+            self.response_cache.set(cache_key, content, resp.status_code, out_headers)
         if (
             self.usage_logger is not None
             and key_info is not None
@@ -280,8 +347,6 @@ class ProxyHandler:
                 error=resp.status_code >= 400,
             )
 
-        out_headers = self._filter_response_headers(resp.headers)
-        out_headers.update(extra_headers)
         return Response(
             content=content,
             status_code=resp.status_code,
@@ -471,6 +536,7 @@ class ProxyHandler:
         status_code: int,
         request_id: str,
         requested_model_name: str,
+        cache_hit: bool = False,
     ) -> None:
         if self.usage_logger is None:
             return
@@ -505,8 +571,18 @@ class ProxyHandler:
                 tokens_per_second=tps,
                 status_code=status_code,
                 request_id=request_id,
+                cache_hit=cache_hit,
             )
         )
+        limiter = self.rate_limiter
+        if limiter is not None and usage.total_tokens > 0:
+            import asyncio
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(limiter.check_token_usage(key_info, usage.total_tokens))
+            except RuntimeError:
+                pass
 
     @staticmethod
     def _filter_response_headers(headers: httpx.Headers) -> dict[str, str]:

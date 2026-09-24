@@ -11,19 +11,38 @@ from wai.proxy.registry import Deployment, Model
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
-def select_deployment(model: Model, *, rng: random.Random | None = None) -> Deployment | None:
-    """Pick a deployment using the model's strategy (weighted, priority, or first)."""
+def select_deployment(
+    model: Model,
+    *,
+    rng: random.Random | None = None,
+    inflight: dict[str, int] | None = None,
+) -> Deployment | None:
+    """Pick a deployment using the model's strategy (weighted, priority, least-busy, or first)."""
     deps = [d for d in model.deployments if d.base_url]
     if not deps:
         return None
     picker = rng or random
     strategy = (model.strategy or "").lower().strip()
+    if strategy in {"least-busy", "least_busy", "least-latency"}:
+        busy = inflight or {}
+        return min(deps, key=lambda d: busy.get(d.base_url, 0))
     if strategy in {"weighted", "weight", "random"}:
         weights = [max(int(d.weight or 0), 1) for d in deps]
         return picker.choices(deps, weights=weights, k=1)[0]
     if strategy in {"priority", "failover"}:
         return sorted(deps, key=lambda d: int(d.priority or 0), reverse=True)[0]
     return deps[0]
+
+
+def is_context_window_error(status_code: int, body: bytes | str | None) -> bool:
+    if status_code not in {400, 413}:
+        return False
+    text = body.decode("utf-8", errors="ignore") if isinstance(body, bytes) else (body or "")
+    lowered = text.lower()
+    return any(
+        token in lowered
+        for token in ("context_length", "maximum context", "context window", "too many tokens")
+    )
 
 
 def apply_deployment(model: Model, deployment: Deployment | None) -> Model:

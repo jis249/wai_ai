@@ -21,6 +21,11 @@ _USAGE_EVENT_SQL = """INSERT INTO usage_events (
        request_duration_ms, ttft_ms, tokens_per_second, status_code, created_at
    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
+_REQUEST_LOG_SQL = """INSERT INTO request_logs (
+       id, created_at, org_id, key_id, model_name, requested_model, status_code,
+       prompt_tokens, completion_tokens, cost_usd, latency_ms, cache_hit
+   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
@@ -183,6 +188,24 @@ class UsageLogger:
 
                 if event_rows:
                     await tx.executemany(_USAGE_EVENT_SQL, event_rows)
+                    log_rows = [
+                        (
+                            new_uuid(),
+                            created_at,
+                            ev.org_id,
+                            ev.key_id,
+                            ev.model_name,
+                            ev.requested_model_name or "",
+                            ev.status_code,
+                            ev.prompt_tokens,
+                            ev.completion_tokens,
+                            ev.cost_estimate or 0.0,
+                            ev.request_duration_ms,
+                            1 if ev.cache_hit else 0,
+                        )
+                        for ev in batch
+                    ]
+                    await tx.executemany(_REQUEST_LOG_SQL, log_rows)
 
                 for r in rollups.values():
                     await tx.execute(

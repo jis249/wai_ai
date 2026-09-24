@@ -28,7 +28,7 @@ const COMPLEX_OPTIONS: SelectOption[] = [
   },
 ]
 
-export default function AutoRoutingPage() {
+export default function AutoRoutingPage({ hideHeader = false }: { hideHeader?: boolean }) {
   const { data: me, isLoading: meLoading } = useMe()
   const isSystemAdmin = me?.is_system_admin === true || me?.role === 'system_admin'
   const { data: config, isLoading, isError } = useAutoRouterConfig(isSystemAdmin)
@@ -103,6 +103,7 @@ export default function AutoRoutingPage() {
 
   return (
     <>
+      {!hideHeader && (
       <PageHeader
         title="Auto routing"
         description="Configure how model auto chooses the best upstream model for each prompt."
@@ -112,6 +113,14 @@ export default function AutoRoutingPage() {
           </Button>
         }
       />
+      )}
+      {hideHeader && (
+        <div className="flex justify-end mb-4">
+          <Button onClick={onSave} disabled={!dirty || update.isPending || isLoading}>
+            {update.isPending ? 'Saving…' : 'Save changes'}
+          </Button>
+        </div>
+      )}
 
       <div className="rounded-lg border border-border bg-bg-secondary max-w-3xl">
         <div className="px-6 py-4 border-b border-border">

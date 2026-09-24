@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Table } from '../components/ui/Table'
 import type { Column } from '../components/ui/Table'
@@ -210,9 +210,14 @@ function CreateTeamDialog({ open, onClose, orgId }: CreateTeamDialogProps) {
 // ---------------------------------------------------------------------------
 
 export default function TeamsPage() {
-  const { data: me } = useMe()
+  const { data: me, isLoading: meLoading } = useMe()
   const orgId = me?.org_id ?? ''
   const isOrgAdmin = me?.role === 'org_admin' || me?.role === 'system_admin'
+  const canManageTeams = me?.role === 'team_admin' || isOrgAdmin
+
+  if (!meLoading && me && !canManageTeams) {
+    return <Navigate to="/" replace />
+  }
 
   const [cursor, setCursor] = useState<string | undefined>()
   const [prevCursors, setPrevCursors] = useState<string[]>([])

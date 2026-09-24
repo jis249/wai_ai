@@ -46,6 +46,7 @@ class CreateAPIKeyRequest(BaseModel):
     monthly_token_limit: int = 0
     requests_per_minute: int = 0
     requests_per_day: int = 0
+    monthly_spend_limit: float = 0
     expires_at: str | None = None
 
 
@@ -55,6 +56,7 @@ class UpdateAPIKeyRequest(BaseModel):
     monthly_token_limit: int | None = None
     requests_per_minute: int | None = None
     requests_per_day: int | None = None
+    monthly_spend_limit: float | None = None
     expires_at: str | None = None
 
 

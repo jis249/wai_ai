@@ -4,7 +4,7 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Banner } from '../components/ui/Banner'
-import { PROXY_PUBLIC_BASE } from '../lib/constants'
+import { PROXY_PUBLIC_BASE, LOCAL_STORAGE_KEY } from '../lib/constants'
 
 interface SetupStatus {
   version: string
@@ -27,7 +27,10 @@ function Row({ ok, label, detail }: { ok: boolean; label: string; detail: string
   )
 }
 
-export default function SetupPage() {
+export default function SetupPage({ embedded = false }: { embedded?: boolean }) {
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_KEY) : null
+  const signedIn = Boolean(token)
+
   const { data: status, error, refetch, isFetching } = useQuery({
     queryKey: ['setup-status'],
     queryFn: async () => {
@@ -38,7 +41,7 @@ export default function SetupPage() {
   })
 
   return (
-    <div className="min-h-screen bg-bg-primary p-8 max-w-2xl mx-auto">
+    <div className={embedded ? 'max-w-2xl' : 'min-h-screen bg-bg-primary p-8 max-w-2xl mx-auto'}>
       <PageHeader
         title="WAI setup"
         description="First-run checklist for a local Windows install (Postgres, Ollama, admin user)."
@@ -77,9 +80,15 @@ export default function SetupPage() {
             <p className="text-text-tertiary text-xs">Create an API key after login, then paste it into Cursor / Continue.</p>
           </div>
           <div className="flex gap-3">
-            <Link to="/login">
-              <Button>{status.ready ? 'Go to login' : 'Login anyway'}</Button>
-            </Link>
+            {signedIn ? (
+              <Link to="/">
+                <Button>Go to dashboard</Button>
+              </Link>
+            ) : (
+              <Link to="/login">
+                <Button>{status.ready ? 'Go to login' : 'Login anyway'}</Button>
+              </Link>
+            )}
             <span className="text-xs text-text-tertiary self-center">v{status.version}</span>
           </div>
         </div>

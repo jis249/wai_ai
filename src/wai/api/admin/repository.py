@@ -67,7 +67,9 @@ async def create_org(
 async def get_org(db: Database, org_id: str) -> dict[str, Any] | None:
     row = await db.fetchone(
         """SELECT id, name, slug, timezone, daily_token_limit, monthly_token_limit,
-                  requests_per_minute, requests_per_day, created_at, updated_at, deleted_at
+                  requests_per_minute, requests_per_day, monthly_spend_limit,
+                  guardrail_pii, guardrail_tool_denylist,
+                  created_at, updated_at, deleted_at
            FROM organizations WHERE id = ? AND deleted_at IS NULL""",
         (org_id,),
     )
@@ -77,7 +79,9 @@ async def get_org(db: Database, org_id: str) -> dict[str, Any] | None:
 async def get_org_with_counts(db: Database, org_id: str) -> dict[str, Any] | None:
     row = await db.fetchone(
         """SELECT o.id, o.name, o.slug, o.timezone, o.daily_token_limit, o.monthly_token_limit,
-                  o.requests_per_minute, o.requests_per_day, o.created_at, o.updated_at, o.deleted_at,
+                  o.requests_per_minute, o.requests_per_day, o.monthly_spend_limit,
+                  o.guardrail_pii, o.guardrail_tool_denylist,
+                  o.created_at, o.updated_at, o.deleted_at,
                   (SELECT COUNT(*) FROM org_memberships m WHERE m.org_id = o.id) AS member_count,
                   (SELECT COUNT(*) FROM teams t WHERE t.org_id = o.id AND t.deleted_at IS NULL) AS team_count
            FROM organizations o WHERE o.id = ? AND o.deleted_at IS NULL""",
@@ -98,7 +102,9 @@ async def list_orgs_with_counts(
     params.append(limit)
     rows = await db.fetchall(
         f"""SELECT o.id, o.name, o.slug, o.timezone, o.daily_token_limit, o.monthly_token_limit,
-                   o.requests_per_minute, o.requests_per_day, o.created_at, o.updated_at, o.deleted_at,
+                   o.requests_per_minute, o.requests_per_day, o.monthly_spend_limit,
+                   o.guardrail_pii, o.guardrail_tool_denylist,
+                   o.created_at, o.updated_at, o.deleted_at,
                    (SELECT COUNT(*) FROM org_memberships m WHERE m.org_id = o.id) AS member_count,
                    (SELECT COUNT(*) FROM teams t WHERE t.org_id = o.id AND t.deleted_at IS NULL) AS team_count
             FROM organizations o WHERE 1=1 {deleted_clause} {cursor_clause}
@@ -109,6 +115,21 @@ async def list_orgs_with_counts(
 
 
 async def update_org(db: Database, org_id: str, fields: dict[str, Any]) -> None:
+    if not fields:
+        return
+    allowed = {
+        "name",
+        "slug",
+        "timezone",
+        "daily_token_limit",
+        "monthly_token_limit",
+        "requests_per_minute",
+        "requests_per_day",
+        "monthly_spend_limit",
+        "guardrail_pii",
+        "guardrail_tool_denylist",
+    }
+    fields = {k: v for k, v in fields.items() if k in allowed}
     if not fields:
         return
     sets = ", ".join(f"{k} = ?" for k in fields)
@@ -843,15 +864,19 @@ async def load_all_active_keys(db: Database) -> list[dict[str, Any]]:
     rows = await db.fetchall(
         """SELECT k.id, k.key_hash, k.key_type, k.name, k.org_id, k.team_id, k.user_id, k.service_account_id,
                   k.daily_token_limit, k.monthly_token_limit, k.requests_per_minute, k.requests_per_day,
-                  k.expires_at,
+                  k.expires_at, k.monthly_spend_limit,
                   o.daily_token_limit AS org_daily_token_limit,
                   o.monthly_token_limit AS org_monthly_token_limit,
                   o.requests_per_minute AS org_requests_per_minute,
                   o.requests_per_day AS org_requests_per_day,
+                  o.monthly_spend_limit AS org_monthly_spend_limit,
+                  o.guardrail_pii AS org_guardrail_pii,
+                  o.guardrail_tool_denylist AS org_guardrail_tool_denylist,
                   t.daily_token_limit AS team_daily_token_limit,
                   t.monthly_token_limit AS team_monthly_token_limit,
                   t.requests_per_minute AS team_requests_per_minute,
                   t.requests_per_day AS team_requests_per_day,
+                  t.monthly_spend_limit AS team_monthly_spend_limit,
                   u.is_system_admin, om.role AS membership_role
            FROM api_keys k
            JOIN organizations o ON o.id = k.org_id
@@ -1121,6 +1146,44 @@ async def get_monthly_token_usage(db: Database, org_id: str) -> int:
         (org_id, start),
     )
     return int(row["t"]) if row else 0
+
+
+async def get_monthly_spend(db: Database, org_id: str) -> float:
+    start = datetime.now(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0,
+    ).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    row = await db.fetchone(
+        """SELECT COALESCE(SUM(cost_sum), 0) AS c FROM usage_hourly
+           WHERE org_id = ? AND bucket_hour >= ?""",
+        (org_id, start),
+    )
+    return float(row["c"]) if row else 0.0
+
+
+async def list_request_logs(
+    db: Database, org_id: str, *, limit: int = 50, team_id: str = "", user_id: str = ""
+) -> list[dict[str, Any]]:
+    clauses = ["r.org_id = ?"]
+    params: list[Any] = [org_id]
+    if team_id:
+        clauses.append("k.team_id = ?")
+        params.append(team_id)
+    if user_id:
+        clauses.append("k.user_id = ?")
+        params.append(user_id)
+    params.append(min(max(limit, 1), 100))
+    rows = await db.fetchall(
+        f"""SELECT r.id, r.created_at, r.status_code, r.model_name, r.requested_model,
+                   r.prompt_tokens, r.completion_tokens, r.cost_usd, r.latency_ms, r.cache_hit,
+                   k.key_hint
+            FROM request_logs r
+            LEFT JOIN api_keys k ON k.id = r.key_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY r.created_at DESC
+            LIMIT ?""",
+        tuple(params),
+    )
+    return [dict(r) for r in rows]
 
 
 async def list_audit_logs(db: Database, filters: dict[str, Any], limit: int) -> tuple[list[dict], bool]:

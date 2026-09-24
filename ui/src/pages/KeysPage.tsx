@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Table } from '../components/ui/Table'
@@ -823,7 +824,7 @@ function EditKeyDialog({ apiKey, onClose, orgId }: EditKeyDialogProps) {
 // KeysPage
 // ---------------------------------------------------------------------------
 
-export default function KeysPage() {
+export default function KeysPage({ hideHeader = false }: { hideHeader?: boolean }) {
   const { data: me } = useMe()
   const orgId = me?.org_id ?? ''
 
@@ -1001,6 +1002,7 @@ export default function KeysPage() {
 
   return (
     <>
+      {!hideHeader && (
       <PageHeader
         title="API Keys"
         description="Manage your API keys. Use http://localhost:8081/v1 as the OpenAI-compatible base URL in Cursor, Continue, or the OpenAI SDK."
@@ -1008,6 +1010,12 @@ export default function KeysPage() {
           <Button onClick={() => setShowCreateDialog(true)}>Create Key</Button>
         }
       />
+      )}
+      {hideHeader && (
+        <div className="flex justify-end mb-4">
+          <Button onClick={() => setShowCreateDialog(true)}>Create Key</Button>
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className="grid grid-cols-3 gap-4 mb-6">
@@ -1038,9 +1046,14 @@ export default function KeysPage() {
           </span>
           <h3 className="mb-1 text-base font-medium text-text-primary">No API keys yet</h3>
           <p className="mb-6 text-sm text-text-secondary">
-            Create your first key to start using the proxy
+            Create a key for Cursor or other clients. The playground can use your login session without a key.
           </p>
-          <Button onClick={() => setShowCreateDialog(true)}>Create Key</Button>
+          <div className="flex gap-2">
+            <Button onClick={() => setShowCreateDialog(true)}>Create Key</Button>
+            <Link to="/playground" className="no-underline">
+              <Button variant="secondary">Open playground</Button>
+            </Link>
+          </div>
         </div>
       ) : (
         <Table<APIKeyResponse>

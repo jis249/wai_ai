@@ -10,19 +10,22 @@ export default function OrganizationPage() {
   const isOrgAdmin = me?.role === 'org_admin' || me?.role === 'system_admin'
 
   const tabs: Tab[] = [
+    ...(isOrgAdmin ? [{ label: 'Members', path: '/org/users' }] : []),
+    { label: 'Settings', path: '/org/settings' },
     ...(isOrgAdmin
       ? [
-          { label: 'Members', path: '/org/users' },
-          { label: 'Models', path: '/org/models' },
-          { label: 'MCP Servers', path: '/org/mcp-access' },
+          { label: 'SSO', path: '/org/sso' },
+          { label: 'Audit log', path: '/org/audit' },
         ]
       : []),
-    { label: 'Settings', path: '/org/settings' },
   ]
 
   return (
     <>
-      <PageHeader title="Organization" description="Manage your organization" />
+      <PageHeader
+        title="Organization"
+        description="Members, limits, SSO, and audit. Model and MCP access live under Models and MCP."
+      />
       <Tabs tabs={tabs} />
       <Outlet />
     </>

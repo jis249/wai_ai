@@ -105,6 +105,20 @@ async def dashboard_stats(key_info: KeyInfo = Depends(auth_middleware)) -> Dashb
                             usage=monthly, percent_used=pct,
                         )
                     )
+            spend_limit = float(org.get("monthly_spend_limit") or 0)
+            if spend_limit > 0:
+                spent = await repo.get_monthly_spend(h.db, org_id)
+                pct = spent / spend_limit
+                if pct >= WARN_THRESHOLD:
+                    resp.budget_warnings.append(
+                        BudgetWarning(
+                            window="monthly_spend",
+                            scope="org",
+                            limit=int(spend_limit),
+                            usage=int(spent),
+                            percent_used=pct,
+                        )
+                    )
 
     if h.health_checker is not None:
         for mh in h.health_checker.get_all_health():

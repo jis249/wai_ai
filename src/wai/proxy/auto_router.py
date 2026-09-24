@@ -491,7 +491,7 @@ class AutoRouter:
             complex_mode=self.config.complex_mode,
             complex_model=self.config.complex_model,
         )
-        if decision is not None:
+        if decision is not None and signals.confidence >= 0.7:
             self.log.info(
                 "auto route heuristic model=%s detail=%s tokens~%d",
                 decision.model_name,
@@ -501,7 +501,7 @@ class AutoRouter:
             self._remember(cache_key, decision)
             return decision
 
-        if classifier_model is not None and signals.is_complex:
+        if classifier_model is not None:
             classified = await self._classify(
                 signals,
                 candidates,
@@ -513,6 +513,10 @@ class AutoRouter:
                 self.log.info("auto route classifier model=%s", classified.model_name)
                 self._remember(cache_key, classified)
                 return classified
+
+        if decision is not None:
+            self._remember(cache_key, decision)
+            return decision
 
         picked = fallback_pick(
             candidates,

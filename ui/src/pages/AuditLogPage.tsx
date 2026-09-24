@@ -255,7 +255,7 @@ const columns: Column<AuditEvent>[] = [
   },
 ]
 
-export default function AuditLogPage() {
+export default function AuditLogPage({ hideHeader = false }: { hideHeader?: boolean }) {
   const [range, setRange] = useState<TimeRange>('7d')
   const [resourceType, setResourceType] = useState('')
   const [action, setAction] = useState('')
@@ -322,10 +322,12 @@ export default function AuditLogPage() {
 
   return (
     <>
+      {!hideHeader && (
       <PageHeader
         title="Audit Log"
         description="Web app activity including user logins, admin changes, and API actions"
       />
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <StatCard

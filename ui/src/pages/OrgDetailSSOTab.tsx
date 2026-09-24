@@ -7,6 +7,7 @@ import { Toggle } from '../components/ui/Toggle'
 import { Select } from '../components/ui/Select'
 import { Badge } from '../components/ui/Badge'
 import { ConfirmDialog } from '../components/ui/Dialog'
+import { useMe } from '../hooks/useMe'
 import { useToast } from '../hooks/useToast'
 import {
   useOrgSSO,
@@ -585,7 +586,9 @@ function SSOForm({ orgId, initial, hasExistingConfig, onDelete }: SSOFormProps) 
 // ---------------------------------------------------------------------------
 
 export default function OrgDetailSSOTab() {
-  const { orgId = '' } = useParams<{ orgId: string }>()
+  const { orgId: paramOrgId = '' } = useParams<{ orgId: string }>()
+  const { data: me } = useMe()
+  const orgId = paramOrgId || me?.org_id || ''
   const [editMode, setEditMode] = useState(false)
 
   const orgSSO = useOrgSSO(orgId)

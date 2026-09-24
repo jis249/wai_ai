@@ -261,7 +261,7 @@ const dayColumns = (formatCost: (amountUsd: number) => string): Column<DayCostRo
 // CostReportsPage
 // ---------------------------------------------------------------------------
 
-export default function CostReportsPage() {
+export default function CostReportsPage({ hideHeader = false }: { hideHeader?: boolean }) {
   const [range, setRange] = useState<TimeRange>('30d')
   const [currency, setCurrency] = useState<CostCurrency>(readStoredCurrency)
   const { data: me } = useMe()
@@ -359,10 +359,12 @@ export default function CostReportsPage() {
 
   return (
     <>
+      {!hideHeader && (
       <PageHeader
         title="Cost Reports"
         description="Cloud-model cost estimates. Local/Ollama traffic is usually $0 — use token budgets on the dashboard as the primary cap."
       />
+      )}
 
       {/* Time range pills + export */}
       <div className="flex items-center gap-3 mb-6">

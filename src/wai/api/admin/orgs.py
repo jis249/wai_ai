@@ -45,6 +45,9 @@ class UpdateOrgRequest(BaseModel):
     monthly_token_limit: int | None = None
     requests_per_minute: int | None = None
     requests_per_day: int | None = None
+    monthly_spend_limit: float | None = None
+    guardrail_pii: bool | None = None
+    guardrail_tool_denylist: str | None = None
 
 
 class OrgResponse(BaseModel):
@@ -56,6 +59,9 @@ class OrgResponse(BaseModel):
     monthly_token_limit: int
     requests_per_minute: int
     requests_per_day: int
+    monthly_spend_limit: float = 0
+    guardrail_pii: bool = False
+    guardrail_tool_denylist: str = ""
     member_count: int
     team_count: int
     created_at: str
@@ -79,6 +85,9 @@ def _org_resp(o: dict[str, Any]) -> OrgResponse:
         monthly_token_limit=int(o.get("monthly_token_limit") or 0),
         requests_per_minute=int(o.get("requests_per_minute") or 0),
         requests_per_day=int(o.get("requests_per_day") or 0),
+        monthly_spend_limit=float(o.get("monthly_spend_limit") or 0),
+        guardrail_pii=bool(int(o.get("guardrail_pii") or 0)),
+        guardrail_tool_denylist=str(o.get("guardrail_tool_denylist") or ""),
         member_count=int(o.get("member_count") or 0),
         team_count=int(o.get("team_count") or 0),
         created_at=o["created_at"],
@@ -172,6 +181,8 @@ async def update_org(
     if body.slug is not None and not SLUG_RE.match(body.slug):
         raise bad_request("slug must be lowercase alphanumeric with hyphens, 2-63 characters")
     fields = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None or k == "timezone"}
+    if "guardrail_pii" in fields:
+        fields["guardrail_pii"] = 1 if fields["guardrail_pii"] else 0
     try:
         await repo.update_org(h.db, org_id, fields)
     except repo.NotFoundError:
@@ -182,6 +193,7 @@ async def update_org(
         raise internal_error("failed to update organization")
     org = await repo.get_org_with_counts(h.db, org_id)
     assert org
+    await h.seed_key_cache()
     return _org_resp(org)
 
 

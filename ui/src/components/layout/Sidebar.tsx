@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { NavLink, Link } from 'react-router-dom'
+import { NavLink, Link, useLocation } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMe } from '../../hooks/useMe'
 import { LOCAL_STORAGE_KEY } from '../../lib/constants'
@@ -17,6 +17,7 @@ interface NavItem {
   locked?: boolean
   minRole?: string
   end?: boolean
+  matchPrefixes?: string[]
 }
 
 interface NavGroup {
@@ -90,28 +91,6 @@ function IconUsers() {
   )
 }
 
-function IconBot() {
-  return (
-    <svg {...iconProps}>
-      <rect x="3" y="11" width="18" height="10" rx="2" />
-      <circle cx="12" cy="5" r="3" />
-      <line x1="12" y1="8" x2="12" y2="11" />
-      <line x1="8" y1="16" x2="8" y2="16.01" />
-      <line x1="16" y1="16" x2="16" y2="16.01" />
-    </svg>
-  )
-}
-
-function IconCube() {
-  return (
-    <svg {...iconProps}>
-      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-      <line x1="12" y1="22.08" x2="12" y2="12" />
-    </svg>
-  )
-}
-
 function IconBarChart() {
   return (
     <svg {...iconProps}>
@@ -122,23 +101,12 @@ function IconBarChart() {
   )
 }
 
-function IconDollar() {
+function IconCube() {
   return (
     <svg {...iconProps}>
-      <line x1="12" y1="1" x2="12" y2="23" />
-      <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
-    </svg>
-  )
-}
-
-function IconClipboardList() {
-  return (
-    <svg {...iconProps}>
-      <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
-      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-      <line x1="9" y1="12" x2="15" y2="12" />
-      <line x1="9" y1="16" x2="15" y2="16" />
-      <line x1="9" y1="8" x2="10" y2="8" />
+      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+      <line x1="12" y1="22.08" x2="12" y2="12" />
     </svg>
   )
 }
@@ -189,42 +157,42 @@ function IconServer() {
   )
 }
 
-function IconRoute() {
-  return (
-    <svg {...iconProps}>
-      <circle cx="6" cy="19" r="3" />
-      <circle cx="18" cy="5" r="3" />
-      <path d="M6 16V9a4 4 0 0 1 4-4h0" />
-      <path d="M18 8v7a4 4 0 0 1-4 4h0" />
-    </svg>
-  )
-}
-
-function buildNavigation(): NavGroup[] {
+function buildNavigation(userRole: string): NavGroup[] {
+  const isMember = userRole === 'member'
   return [
     {
       label: 'Overview',
-      items: [
-        { label: 'Dashboard', path: '/', icon: <IconDashboard /> },
-        { label: 'Playground', path: '/playground', icon: <IconTerminal /> },
-      ],
+      items: isMember
+        ? [{ label: 'Home', path: '/playground', icon: <IconTerminal /> }]
+        : [
+            { label: 'Dashboard', path: '/', icon: <IconDashboard /> },
+            { label: 'Playground', path: '/playground', icon: <IconTerminal /> },
+          ],
     },
     {
       label: 'Manage',
       items: [
-        { label: 'Keys', path: '/keys', icon: <IconKey /> },
-        { label: 'Models', path: '/models', icon: <IconCube /> },
+        {
+          label: 'API access',
+          path: '/keys',
+          icon: <IconKey />,
+          matchPrefixes: ['/keys', '/service-accounts'],
+        },
+        { label: 'Models', path: '/models', icon: <IconCube />, end: false },
         { label: 'Teams', path: '/teams', icon: <IconUsers />, minRole: 'team_admin', end: false },
-        { label: 'Service Accounts', path: '/service-accounts', icon: <IconBot /> },
-        { label: 'MCP Servers', path: '/mcp-servers', icon: <IconPlug /> },
+        { label: 'MCP', path: '/mcp', icon: <IconPlug />, end: false, matchPrefixes: ['/mcp'] },
       ],
     },
     {
       label: 'Analytics',
       items: [
-        { label: 'Usage', path: '/usage', icon: <IconBarChart /> },
-        { label: 'Cost Reports', path: '/cost-reports', icon: <IconDollar /> },
-        { label: 'Audit Log', path: '/audit-log', icon: <IconClipboardList />, minRole: 'org_admin' },
+        {
+          label: 'Insights',
+          path: '/usage',
+          icon: <IconBarChart />,
+          end: false,
+          matchPrefixes: ['/usage'],
+        },
       ],
     },
     {
@@ -239,9 +207,13 @@ function buildNavigation(): NavGroup[] {
       items: [
         { label: 'Organizations', path: '/orgs', icon: <IconBuilding />, end: false },
         { label: 'Users', path: '/users', icon: <IconPersonPlus /> },
-        { label: 'System Usage', path: '/system-usage', icon: <IconServer /> },
-        { label: 'Auto routing', path: '/auto-routing', icon: <IconRoute /> },
-        { label: 'Setup', path: '/setup', icon: <IconPlug /> },
+        {
+          label: 'Platform',
+          path: '/platform',
+          icon: <IconServer />,
+          end: false,
+          matchPrefixes: ['/platform'],
+        },
       ],
     },
   ]
@@ -269,11 +241,12 @@ function LockIcon() {
 export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?: () => void }) {
   const { data } = useMe()
   const queryClient = useQueryClient()
+  const location = useLocation()
 
   const userRole = data?.role ?? 'member'
 
   const visibleGroups = useMemo(() => {
-    const navigation = buildNavigation()
+    const navigation = buildNavigation(userRole)
     return navigation
       .filter(group => hasMinRole(userRole, group.minRole))
       .map(group => ({
@@ -332,14 +305,18 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
                     key={item.path}
                     to={item.path}
                     end={item.end !== undefined ? item.end : item.path === '/'}
-                    className={({ isActive }) =>
-                      [
+                    className={({ isActive }) => {
+                      const prefixMatch = item.matchPrefixes?.some(
+                        (p) => location.pathname === p || location.pathname.startsWith(`${p}/`),
+                      )
+                      const active = Boolean(prefixMatch) || isActive
+                      return [
                         'flex items-center gap-3 px-3 py-2 rounded-lg text-sm no-underline transition-all duration-200',
-                        isActive
+                        active
                           ? 'bg-accent/15 text-accent shadow-[inset_3px_0_0_var(--color-accent)]'
                           : 'text-text-secondary hover:bg-bg-tertiary hover:text-text-primary',
                       ].join(' ')
-                    }
+                    }}
                     title={item.label}
                   >
                     {item.icon}

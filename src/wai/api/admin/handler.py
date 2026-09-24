@@ -173,6 +173,11 @@ class Handler:
                 team_monthly_token_limit=int(r.get("team_monthly_token_limit") or 0),
                 team_requests_per_minute=int(r.get("team_requests_per_minute") or 0),
                 team_requests_per_day=int(r.get("team_requests_per_day") or 0),
+                monthly_spend_limit=float(r.get("monthly_spend_limit") or 0),
+                org_monthly_spend_limit=float(r.get("org_monthly_spend_limit") or 0),
+                team_monthly_spend_limit=float(r.get("team_monthly_spend_limit") or 0),
+                org_guardrail_pii=bool(int(r.get("org_guardrail_pii") or 0)),
+                org_guardrail_tool_denylist=str(r.get("org_guardrail_tool_denylist") or ""),
             )
         self.key_cache.load_all(entries)
 

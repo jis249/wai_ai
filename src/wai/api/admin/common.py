@@ -164,6 +164,10 @@ def limit_reached(msg: str) -> HTTPException:
     return api_error(403, "limit_reached", msg)
 
 
+def budget_exceeded(msg: str) -> HTTPException:
+    return api_error(429, "budget_exceeded", msg)
+
+
 def rate_limited(msg: str = "too many requests") -> HTTPException:
     return api_error(429, "rate_limited", msg)
 
@@ -219,6 +223,11 @@ class KeyInfo:
     team_monthly_token_limit: int = 0
     team_requests_per_minute: int = 0
     team_requests_per_day: int = 0
+    monthly_spend_limit: float = 0.0
+    org_monthly_spend_limit: float = 0.0
+    team_monthly_spend_limit: float = 0.0
+    org_guardrail_pii: bool = False
+    org_guardrail_tool_denylist: str = ""
 
 
 KEY_INFO_CTX = "wai_key_info"

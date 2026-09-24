@@ -10,6 +10,9 @@ export interface OrgResponse {
   monthly_token_limit: number
   requests_per_minute: number
   requests_per_day: number
+  monthly_spend_limit?: number
+  guardrail_pii?: boolean
+  guardrail_tool_denylist?: string
   created_at: string
   updated_at: string
 }
@@ -21,6 +24,9 @@ export interface UpdateOrgParams {
   monthly_token_limit?: number
   requests_per_minute?: number
   requests_per_day?: number
+  monthly_spend_limit?: number
+  guardrail_pii?: boolean
+  guardrail_tool_denylist?: string
 }
 
 export function useOrg(orgId: string) {

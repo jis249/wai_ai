@@ -67,7 +67,7 @@ const MODEL_TYPE_OPTIONS = [
 
 const STRATEGY_OPTIONS = [
   { value: 'round-robin', label: 'Round Robin' },
-  { value: 'least-latency', label: 'Least Latency' },
+  { value: 'least-busy', label: 'Least Busy' },
   { value: 'weighted', label: 'Weighted' },
   { value: 'priority', label: 'Priority' },
 ]
@@ -1439,7 +1439,7 @@ function EditModelDialog({ model, onClose }: EditModelDialogProps) {
 // ModelsPage
 // ---------------------------------------------------------------------------
 
-export default function ModelsPage({ readOnly = false }: { readOnly?: boolean }) {
+export default function ModelsPage({ readOnly = false, hideHeader = false }: { readOnly?: boolean; hideHeader?: boolean }) {
   const [detailModel, setDetailModel] = useState<ModelResponse | null>(null)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [editModel, setEditModel] = useState<ModelResponse | null>(null)
@@ -1714,6 +1714,7 @@ export default function ModelsPage({ readOnly = false }: { readOnly?: boolean })
 
   return (
     <>
+      {!hideHeader && (
       <PageHeader
         title="Models"
         description={readOnly ? 'Models available to your account (read-only)' : 'System model registry'}
@@ -1723,6 +1724,12 @@ export default function ModelsPage({ readOnly = false }: { readOnly?: boolean })
           )
         }
       />
+      )}
+      {hideHeader && !readOnly && (
+        <div className="flex justify-end mb-4">
+          <Button onClick={() => setShowCreateDialog(true)}>Add Model</Button>
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className={`grid grid-cols-1 ${readOnly ? 'sm:grid-cols-1' : 'sm:grid-cols-3'} gap-4 mb-6`}>

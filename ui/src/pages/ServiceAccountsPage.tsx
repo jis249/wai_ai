@@ -415,7 +415,7 @@ function EditServiceAccountDialog({ open, onClose, sa, orgId }: EditServiceAccou
 // ServiceAccountsPage
 // ---------------------------------------------------------------------------
 
-export default function ServiceAccountsPage() {
+export default function ServiceAccountsPage({ hideHeader = false }: { hideHeader?: boolean }) {
   const { data: me } = useMe()
   const orgId = me?.org_id ?? ''
 
@@ -516,6 +516,7 @@ export default function ServiceAccountsPage() {
 
   return (
     <>
+      {!hideHeader && (
       <PageHeader
         title="Service Accounts"
         description="Manage service accounts for automation"
@@ -523,6 +524,12 @@ export default function ServiceAccountsPage() {
           <Button onClick={() => setShowCreateDialog(true)}>Create Service Account</Button>
         }
       />
+      )}
+      {hideHeader && (
+        <div className="flex justify-end mb-4">
+          <Button onClick={() => setShowCreateDialog(true)}>Create Service Account</Button>
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-4 mb-6">
         <StatCard

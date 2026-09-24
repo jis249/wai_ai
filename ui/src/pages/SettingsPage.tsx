@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Input } from '../components/ui/Input'
 import { Button } from '../components/ui/Button'
+import { Toggle } from '../components/ui/Toggle'
 import { useMe } from '../hooks/useMe'
 import { useOrg, useUpdateOrg } from '../hooks/useOrg'
 import type { OrgResponse, UpdateOrgParams } from '../hooks/useOrg'
@@ -26,6 +27,9 @@ interface FormState {
   monthlyTokenLimit: string
   requestsPerMinute: string
   requestsPerDay: string
+  monthlySpendLimit: string
+  guardrailPii: boolean
+  toolDenylist: string
 }
 
 function formFromOrg(org: OrgResponse): FormState {
@@ -36,6 +40,9 @@ function formFromOrg(org: OrgResponse): FormState {
     monthlyTokenLimit: String(org.monthly_token_limit),
     requestsPerMinute: String(org.requests_per_minute),
     requestsPerDay: String(org.requests_per_day),
+    monthlySpendLimit: String(org.monthly_spend_limit ?? 0),
+    guardrailPii: Boolean(org.guardrail_pii),
+    toolDenylist: org.guardrail_tool_denylist ?? '',
   }
 }
 
@@ -63,7 +70,10 @@ function OrgSettingsForm({ org, readOnly }: OrgSettingsFormProps) {
     parseLimit(form.dailyTokenLimit) !== org.daily_token_limit ||
     parseLimit(form.monthlyTokenLimit) !== org.monthly_token_limit ||
     parseLimit(form.requestsPerMinute) !== org.requests_per_minute ||
-    parseLimit(form.requestsPerDay) !== org.requests_per_day
+    parseLimit(form.requestsPerDay) !== org.requests_per_day ||
+    parseFloat(form.monthlySpendLimit || '0') !== (org.monthly_spend_limit ?? 0) ||
+    form.guardrailPii !== Boolean(org.guardrail_pii) ||
+    form.toolDenylist !== (org.guardrail_tool_denylist ?? '')
 
   function patch(field: keyof FormState) {
     return (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -101,6 +111,9 @@ function OrgSettingsForm({ org, readOnly }: OrgSettingsFormProps) {
       monthly_token_limit: parseLimit(form.monthlyTokenLimit),
       requests_per_minute: parseLimit(form.requestsPerMinute),
       requests_per_day: parseLimit(form.requestsPerDay),
+      monthly_spend_limit: Number(form.monthlySpendLimit) || 0,
+      guardrail_pii: form.guardrailPii,
+      guardrail_tool_denylist: form.toolDenylist,
     }
 
     updateOrg.mutate(params, {
@@ -183,6 +196,31 @@ function OrgSettingsForm({ org, readOnly }: OrgSettingsFormProps) {
             value={form.requestsPerDay}
             onChange={patch('requestsPerDay')}
             description="0 = unlimited"
+            disabled={readOnly || updateOrg.isPending}
+          />
+          <Input
+            label="Monthly spend limit (USD)"
+            type="number"
+            min="0"
+            step="0.01"
+            value={form.monthlySpendLimit}
+            onChange={patch('monthlySpendLimit')}
+            description="Hard block when estimated spend reaches this amount. 0 = unlimited"
+            disabled={readOnly || updateOrg.isPending}
+          />
+        </div>
+        <div className="space-y-3 pt-2">
+          <Toggle
+            checked={form.guardrailPii}
+            onChange={(checked) => setForm((prev) => ({ ...prev, guardrailPii: checked }))}
+            label="Block obvious PII (SSN / card numbers) in prompts"
+            disabled={readOnly || updateOrg.isPending}
+          />
+          <Input
+            label="Denied tool names"
+            value={form.toolDenylist}
+            onChange={patch('toolDenylist')}
+            description="Comma-separated function/tool names to block"
             disabled={readOnly || updateOrg.isPending}
           />
         </div>

@@ -91,7 +91,7 @@ function StorageRow({ disk }: { disk: SystemStorageInfo }) {
   )
 }
 
-export default function SystemUsagePage() {
+export default function SystemUsagePage({ hideHeader = false }: { hideHeader?: boolean }) {
   const { data: me } = useMe()
   const { data, isLoading, error } = useSystemUsage(me?.is_system_admin === true)
   const ollama = useQuery({
@@ -117,7 +117,7 @@ export default function SystemUsagePage() {
   if (me && !me.is_system_admin) {
     return (
       <>
-        <PageHeader title="System Usage" description="Host resource usage and runtime configuration" />
+        {!hideHeader && <PageHeader title="System Usage" description="Host resource usage and runtime configuration" />}
         <div className="rounded-lg border border-border bg-bg-secondary p-12 text-center">
           <p className="text-sm text-text-tertiary">You need system admin permissions to view system usage.</p>
         </div>
@@ -132,10 +132,12 @@ export default function SystemUsagePage() {
 
   return (
     <>
+      {!hideHeader && (
       <PageHeader
         title="System Usage"
         description="Admin-only host resource usage, hardware inventory, and safe runtime configuration."
       />
+      )}
 
       {error instanceof Error && (
         <div className="mb-6 rounded-lg border border-error/30 bg-error/10 p-4 text-sm text-error">

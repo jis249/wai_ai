@@ -60,6 +60,10 @@ class ModelHealthChecker:
     def get_all_health(self) -> list[dict[str, Any]]:
         return list(self._health.values())
 
+    def is_unhealthy(self, model_name: str) -> bool:
+        item = self._health.get(model_name) or {}
+        return item.get("status") == "unhealthy"
+
     async def _loop(self) -> None:
         while not self._stop.is_set():
             try:

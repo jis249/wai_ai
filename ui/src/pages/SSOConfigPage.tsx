@@ -204,7 +204,7 @@ export default function SSOConfigPage() {
 
   // org_admin (non-system-admin): redirect to their org's SSO tab
   if (me && !me.is_system_admin && me.org_id) {
-    return <Navigate to={`/orgs/${me.org_id}/sso`} replace />
+    return <Navigate to="/org/sso" replace />
   }
 
   return (

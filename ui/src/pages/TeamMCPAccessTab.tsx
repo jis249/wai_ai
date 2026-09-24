@@ -7,8 +7,9 @@ import { StatCard } from '../components/ui/StatCard'
 import { useToast } from '../hooks/useToast'
 import { cn } from '../lib/utils'
 
-export default function TeamMCPAccessTab() {
-  const { teamId = '' } = useParams<{ teamId: string }>()
+export default function TeamMCPAccessTab({ teamId: teamIdProp }: { teamId?: string }) {
+  const { teamId: paramTeamId = '' } = useParams<{ teamId: string }>()
+  const teamId = teamIdProp || paramTeamId
   const { data: me } = useMe()
   const orgId = me?.org_id ?? ''
 

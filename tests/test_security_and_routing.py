@@ -7,7 +7,9 @@ from types import SimpleNamespace
 
 from wai.net.client_ip import client_ip, trust_proxy_headers
 from wai.proxy.registry import Deployment, Model
-from wai.proxy.routing import apply_deployment, select_deployment, walk_fallback_names
+from wai.proxy.routing import apply_deployment, is_context_window_error, select_deployment, walk_fallback_names
+from wai.proxy.response_cache import ResponseCache
+from wai.proxy.guardrail import apply_org_guardrails
 from wai.security.url import validate_http_url
 from wai.updates import UpdateChecker
 from wai import __version__
@@ -127,3 +129,63 @@ def test_metrics_token_required(monkeypatch):
     app = DummyApp()
     register_health_routes(app, DummyDB())  # type: ignore[arg-type]
     assert any(getattr(r, "path", "") == "/metrics" for r in app.router.routes)
+
+
+def test_select_deployment_least_busy():
+    model = Model(
+        name="m",
+        strategy="least-busy",
+        deployments=[
+            Deployment(name="a", base_url="http://a"),
+            Deployment(name="b", base_url="http://b"),
+        ],
+    )
+    dep = select_deployment(model, inflight={"http://a": 3, "http://b": 0})
+    assert dep is not None
+    assert dep.base_url == "http://b"
+
+
+def test_context_window_error_detection():
+    assert is_context_window_error(400, b'{"error":{"message":"maximum context length exceeded"}}')
+    assert not is_context_window_error(500, b"oops")
+
+
+def test_response_cache_roundtrip():
+    cache = ResponseCache(ttl_seconds=30, max_entries=8)
+    key = cache.make_key("m", b'{"messages":[]}')
+    cache.set(key, b'{"ok":true}', 200, {"Content-Type": "application/json"})
+    hit = cache.get(key)
+    assert hit is not None
+    content, status, headers = hit
+    assert status == 200
+    assert b"ok" in content
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_guardrail_blocks_ssn():
+    from fastapi import HTTPException
+
+    try:
+        apply_org_guardrails(
+            {"messages": [{"role": "user", "content": "ssn 123-45-6789"}]},
+            pii_enabled=True,
+            tool_denylist="",
+        )
+        assert False, "expected HTTPException"
+    except HTTPException as exc:
+        assert exc.status_code == 400
+
+
+def test_guardrail_blocks_denied_tool():
+    from fastapi import HTTPException
+
+    try:
+        apply_org_guardrails(
+            {"tools": [{"type": "function", "function": {"name": "bash"}}]},
+            pii_enabled=False,
+            tool_denylist="bash,shell",
+        )
+        assert False, "expected HTTPException"
+    except HTTPException as exc:
+        assert exc.status_code == 400
+

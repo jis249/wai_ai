@@ -18,7 +18,6 @@ import { useOrg } from '../hooks/useOrg'
 import { useModelHealth } from '../hooks/useModelHealth'
 import type { ModelHealthInfo } from '../hooks/useModelHealth'
 import { useUpdateCheck } from '../hooks/useUpdateCheck'
-import { useMyAutoUsage } from '../hooks/useAutoUsage'
 import { formatTokens, formatCost, formatNumber } from '../lib/utils'
 
 // ---------------------------------------------------------------------------
@@ -39,20 +38,6 @@ function getTimeRange(range: TimeRange): { from: string; to: string } {
 // ---------------------------------------------------------------------------
 // BudgetWarningBanners
 // ---------------------------------------------------------------------------
-
-function privacyTitle(byModel: { routed_model: string; total_requests: number }[]): string {
-  const cloudHint = /azure|gpt-|openai|claude|gemini/i
-  let local = 0
-  let cloud = 0
-  for (const row of byModel) {
-    if (cloudHint.test(row.routed_model)) cloud += row.total_requests
-    else local += row.total_requests
-  }
-  const total = local + cloud
-  if (total === 0) return 'No auto-router traffic yet'
-  const pct = Math.round((local / total) * 100)
-  return `Auto-router privacy: ${pct}% of requests stayed on local models (${local} local / ${cloud} cloud)`
-}
 
 function BudgetWarningBanners({ warnings }: { warnings: BudgetWarning[] }) {
   if (warnings.length === 0) return null
@@ -330,7 +315,6 @@ export default function DashboardPage() {
 
   // Time-series and model usage share the same range
   const { from, to } = useMemo(() => getTimeRange(timeRange), [timeRange])
-  const autoUsage = useMyAutoUsage(from, to, !!me)
 
   const orgTopModels = useUsage(
     orgId,
@@ -446,13 +430,6 @@ export default function DashboardPage() {
         {/* Budget warnings */}
         {(stats?.budget_warnings?.length ?? 0) > 0 && (
           <BudgetWarningBanners warnings={stats?.budget_warnings ?? []} />
-        )}
-
-        {autoUsage.data && autoUsage.data.total_requests > 0 && (
-          <Banner
-            variant="info"
-            title={privacyTitle(autoUsage.data.by_model)}
-          />
         )}
 
         {/* Update notification */}

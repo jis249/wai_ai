@@ -111,6 +111,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
 
         rate_limiter = RateLimiter(db, log=logger)
         await rate_limiter.start()
+        state["rate_limiter"] = rate_limiter
         brute_force = BruteForceGuard(db, cfg.settings.rate_limit, log=logger)
         audit_logger = AuditLogger(db, log=logger)
         await audit_logger.start()
@@ -176,6 +177,8 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
             max_stream_duration=cfg.server.proxy.max_stream_duration.total_seconds(),
             auto_router_config=auto_cfg,
             fallback_max_depth=cfg.settings.fallback_max_depth,
+            health_checker=health_checker,
+            rate_limiter=rate_limiter,
         )
 
         if not state["routes_registered"]:
@@ -251,6 +254,8 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
                     usage_logger=state.get("usage_logger"),
                     auto_router_config=auto_cfg,
                     fallback_max_depth=cfg.settings.fallback_max_depth,
+                    health_checker=state.get("health_checker"),
+                    rate_limiter=state.get("rate_limiter"),
                 )
                 state["proxy_handler"] = ph
                 app.state.proxy_handler = ph

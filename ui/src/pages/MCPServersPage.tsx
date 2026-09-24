@@ -1109,7 +1109,7 @@ function ServerExpandedRow({ server, canModify, health }: ServerExpandedRowProps
 // MCPServersPage
 // ---------------------------------------------------------------------------
 
-export default function MCPServersPage() {
+export default function MCPServersPage({ hideHeader = false }: { hideHeader?: boolean }) {
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [editServer, setEditServer] = useState<MCPServerResponse | null>(null)
   const [deleteServerId, setDeleteServerId] = useState<string | null>(null)
@@ -1397,6 +1397,7 @@ export default function MCPServersPage() {
 
   return (
     <>
+      {!hideHeader && (
       <PageHeader
         title="MCP Servers"
         description="Manage Model Context Protocol server connections"
@@ -1406,6 +1407,12 @@ export default function MCPServersPage() {
           ) : undefined
         }
       />
+      )}
+      {hideHeader && canCreate && (
+        <div className="flex justify-end mb-4">
+          <Button onClick={() => setShowCreateDialog(true)}>Add Server</Button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard

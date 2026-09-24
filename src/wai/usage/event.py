@@ -32,6 +32,7 @@ class UsageEvent:
     tokens_per_second: float | None
     status_code: int
     request_id: str
+    cache_hit: bool = False
 
 
 def extract_usage(body: bytes) -> UsageInfo:

@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from wai.api.admin.common import KeyInfo, limit_reached
+from wai.api.admin.common import KeyInfo, budget_exceeded, limit_reached
 from wai.db.connection import Database
 
 _SCOPE_CHECKS = (
@@ -76,6 +76,7 @@ class RateLimiter:
                     raise limit_reached("requests per day limit exceeded")
 
         await self._check_token_limits(key_info)
+        await self._check_spend_limits(key_info)
 
     async def check_token_usage(self, key_info: KeyInfo, tokens: int) -> None:
         """Verify token usage after a completed request would not exceed daily/monthly caps."""
@@ -145,6 +146,29 @@ class RateLimiter:
                 )
             except Exception as exc:
                 self._log.warning("rate limit flush failed: %s", exc)
+
+    async def _check_spend_limits(self, key_info: KeyInfo) -> None:
+        scopes = (
+            ("key", key_info.id, float(key_info.monthly_spend_limit or 0)),
+            ("team", key_info.team_id, float(key_info.team_monthly_spend_limit or 0)),
+            ("org", key_info.org_id, float(key_info.org_monthly_spend_limit or 0)),
+        )
+        for scope_type, scope_id, limit in scopes:
+            if not scope_id or limit <= 0:
+                continue
+            used = await self._sum_hourly_cost(scope_type, scope_id, _month_window())
+            if used >= limit:
+                raise budget_exceeded(f"{scope_type} monthly spend limit exceeded")
+
+    async def _sum_hourly_cost(self, scope_type: str, scope_id: str, since_bucket: str) -> float:
+        col = {"key": "key_id", "team": "team_id", "org": "org_id"}.get(scope_type)
+        if not col:
+            return 0.0
+        row = await self._db.fetchone(
+            f"SELECT COALESCE(SUM(cost_sum), 0) AS c FROM usage_hourly WHERE {col} = ? AND bucket_hour >= ?",
+            (scope_id, since_bucket),
+        )
+        return float(row["c"]) if row else 0.0
 
     async def _sum_hourly_tokens(self, scope_type: str, scope_id: str, since_bucket: str) -> int:
         col = {"key": "key_id", "team": "team_id", "org": "org_id"}.get(scope_type)

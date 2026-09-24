@@ -12,6 +12,7 @@ from wai.api.admin.common import (
     ROLE_MEMBER,
     ROLE_ORG_ADMIN,
     ROLE_SYSTEM_ADMIN,
+    ROLE_TEAM_ADMIN,
     bad_request,
     forbidden,
     has_role,
@@ -389,4 +390,59 @@ async def get_org_auto_routing_usage(
         raw, rows, org_id=org_id,
         from_iso=from_dt.isoformat(), to_iso=to_dt.isoformat(), include_org=False,
         default_model=default_model,
+    )
+
+
+class RequestLogItem(BaseModel):
+    id: str
+    created_at: str
+    status: int
+    model: str
+    routed_model: str
+    key_hint: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0
+    latency_ms: int = 0
+    cache_hit: bool = False
+
+
+class RequestLogsResponse(BaseModel):
+    data: list[RequestLogItem] = Field(default_factory=list)
+    has_more: bool = False
+
+
+@router.get("/usage/request-logs", response_model=RequestLogsResponse)
+async def list_request_logs(
+    limit: int = Query(50),
+    key_info: KeyInfo = Depends(auth_middleware),
+) -> RequestLogsResponse:
+    h = get_handler()
+    team_id = ""
+    user_id = ""
+    if not has_role(key_info.role, ROLE_ORG_ADMIN):
+        if has_role(key_info.role, ROLE_TEAM_ADMIN):
+            team_id = key_info.team_id
+        else:
+            user_id = key_info.user_id
+    rows = await repo.list_request_logs(
+        h.db, key_info.org_id, limit=limit, team_id=team_id, user_id=user_id
+    )
+    return RequestLogsResponse(
+        data=[
+            RequestLogItem(
+                id=r["id"],
+                created_at=r["created_at"],
+                status=int(r.get("status_code") or 0),
+                model=r.get("model_name") or "",
+                routed_model=r.get("requested_model") or "",
+                key_hint=r.get("key_hint") or "",
+                prompt_tokens=int(r.get("prompt_tokens") or 0),
+                completion_tokens=int(r.get("completion_tokens") or 0),
+                cost_usd=float(r.get("cost_usd") or 0),
+                latency_ms=int(r.get("latency_ms") or 0),
+                cache_hit=bool(int(r.get("cache_hit") or 0)),
+            )
+            for r in rows
+        ]
     )

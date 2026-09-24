@@ -10,8 +10,9 @@ import { useToast } from '../hooks/useToast'
 import { cn } from '../lib/utils'
 import { providerBadgeVariant, isKnownProvider } from '../lib/providers'
 
-export default function TeamModelsTab() {
-  const { teamId = '' } = useParams<{ teamId: string }>()
+export default function TeamModelsTab({ teamId: teamIdProp }: { teamId?: string }) {
+  const { teamId: paramTeamId = '' } = useParams<{ teamId: string }>()
+  const teamId = teamIdProp || paramTeamId
   const { data: me } = useMe()
   const orgId = me?.org_id ?? ''
 
