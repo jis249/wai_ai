@@ -8,6 +8,9 @@ import { useServerConfig } from '../../hooks/useServerConfig'
 import { useToast } from '../../hooks/useToast'
 import apiClient from '../../api/client'
 import { errorMessage } from '../../lib/errors'
+import { useUpdatePricingSettings } from '../../hooks/usePricingSync'
+import { PricingCatalogFields } from './PricingCatalogFields'
+import type { PricingCatalogState } from './PricingCatalogFields'
 import {
   BasicsSection,
   ConnectionSection,
@@ -51,11 +54,13 @@ export function CreateModelSheet({ onClose }: CreateModelSheetProps) {
 
   const createModel = useCreateModel()
   const createDeployment = useCreateDeployment()
+  const updatePricing = useUpdatePricingSettings()
+  const [pricing, setPricing] = useState<PricingCatalogState>({ pricingKey: '', pricingSource: 'manual' })
   const { toast } = useToast()
   const { data: serverConfig } = useServerConfig()
   const { data: modelsData } = useModels()
   const fallbackEnabled = (serverConfig?.fallback_max_depth ?? 0) > 0
-  const isPending = createModel.isPending || createDeployment.isPending
+  const isPending = createModel.isPending || createDeployment.isPending || updatePricing.isPending
 
   const fallbackOptions = useMemo(
     () => buildFallbackOptions(modelsData?.data ?? [], values.name, values.type),
@@ -111,6 +116,20 @@ export function CreateModelSheet({ onClose }: CreateModelSheetProps) {
     return params
   }
 
+  /** Catalog settings live on their own endpoint; saved after the model exists. */
+  async function savePricingSettings(modelId: string) {
+    const key = pricing.pricingKey.trim()
+    if (!key && pricing.pricingSource === 'manual') return
+    try {
+      await updatePricing.mutateAsync({
+        modelId,
+        params: { pricing_source: pricing.pricingSource, pricing_key: key },
+      })
+    } catch (err) {
+      toast({ variant: 'error', message: errorMessage(err, 'Model added, but saving catalog pricing settings failed') })
+    }
+  }
+
   async function handleSubmit(e: React.MouseEvent) {
     e.preventDefault()
     if (!validate()) return
@@ -134,7 +153,8 @@ export function CreateModelSheet({ onClose }: CreateModelSheetProps) {
       if (aliases.length > 0) params.aliases = aliases
 
       createModel.mutate(params, {
-        onSuccess: () => {
+        onSuccess: async (model) => {
+          await savePricingSettings(model.id)
           toast({ variant: 'success', message: 'Model added' })
           onClose()
         },
@@ -174,6 +194,7 @@ export function CreateModelSheet({ onClose }: CreateModelSheetProps) {
           },
         })
       }
+      await savePricingSettings(model.id)
       toast({ variant: 'success', message: 'Model added' })
       onClose()
     } catch (err) {
@@ -231,7 +252,15 @@ export function CreateModelSheet({ onClose }: CreateModelSheetProps) {
           </FormSection>
         )}
 
-        <PricingSection values={values} onChange={patch} disabled={isPending} />
+        <PricingSection values={values} onChange={patch} disabled={isPending}>
+          <PricingCatalogFields
+            values={values}
+            onChange={patch}
+            state={pricing}
+            onStateChange={(p) => setPricing((prev) => ({ ...prev, ...p }))}
+            disabled={isPending}
+          />
+        </PricingSection>
         <LimitsSection values={values} onChange={patch} disabled={isPending} showRouting={mode === 'loadbalanced'} />
 
         {mode === 'loadbalanced' && (

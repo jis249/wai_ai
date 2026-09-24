@@ -6,6 +6,9 @@ import type { ModelResponse, UpdateModelParams } from '../../hooks/useModels'
 import { useServerConfig } from '../../hooks/useServerConfig'
 import { useToast } from '../../hooks/useToast'
 import { errorMessage } from '../../lib/errors'
+import { usePricingSettings, useUpdatePricingSettings } from '../../hooks/usePricingSync'
+import { PricingCatalogFields } from './PricingCatalogFields'
+import type { PricingCatalogState } from './PricingCatalogFields'
 import {
   BasicsSection,
   ConnectionSection,
@@ -87,11 +90,22 @@ export function EditModelSheet({ model, onClose }: EditModelSheetProps) {
   const [values, setValues] = useState<ModelFormValues>(() => modelToForm(model))
 
   const updateModel = useUpdateModel()
+  const pricingSettings = usePricingSettings(model.id)
+  const updatePricing = useUpdatePricingSettings()
+  // Local edits layered over the saved catalog settings (null until they load).
+  const [pricingEdits, setPricingEdits] = useState<Partial<PricingCatalogState>>({})
+  const pricing: PricingCatalogState | null = pricingSettings.data
+    ? {
+        pricingKey: pricingSettings.data.pricing_key ?? '',
+        pricingSource: pricingSettings.data.pricing_source === 'synced' ? 'synced' : 'manual',
+        ...pricingEdits,
+      }
+    : null
   const { toast } = useToast()
   const { data: serverConfig } = useServerConfig()
   const { data: modelsData } = useModels()
   const fallbackEnabled = (serverConfig?.fallback_max_depth ?? 0) > 0
-  const isPending = updateModel.isPending
+  const isPending = updateModel.isPending || updatePricing.isPending
 
   const fallbackOptions = useMemo(
     () => buildFallbackOptions(modelsData?.data ?? [], values.name, values.type),
@@ -102,25 +116,30 @@ export function EditModelSheet({ model, onClose }: EditModelSheetProps) {
     setValues((prev) => ({ ...prev, ...p }))
   }
 
-  function handleSubmit(e: React.FormEvent | React.MouseEvent) {
+  async function handleSubmit(e: React.FormEvent | React.MouseEvent) {
     e.preventDefault()
     const params = buildUpdateParams(model, values)
-    if (Object.keys(params).length === 0) {
+    const saved = pricingSettings.data
+    const pricingParams: { pricing_source?: 'manual' | 'synced'; pricing_key?: string } = {}
+    if (pricing && saved) {
+      const savedSource = saved.pricing_source === 'synced' ? 'synced' : 'manual'
+      if (pricing.pricingSource !== savedSource) pricingParams.pricing_source = pricing.pricingSource
+      if (pricing.pricingKey.trim() !== (saved.pricing_key ?? '')) pricingParams.pricing_key = pricing.pricingKey.trim()
+    }
+    if (Object.keys(params).length === 0 && Object.keys(pricingParams).length === 0) {
       onClose()
       return
     }
-    updateModel.mutate(
-      { modelId: model.id, params },
-      {
-        onSuccess: () => {
-          toast({ variant: 'success', message: 'Model updated' })
-          onClose()
-        },
-        onError: (err) => {
-          toast({ variant: 'error', message: errorMessage(err, 'Update failed') })
-        },
-      },
-    )
+    try {
+      if (Object.keys(params).length > 0) await updateModel.mutateAsync({ modelId: model.id, params })
+      if (Object.keys(pricingParams).length > 0) {
+        await updatePricing.mutateAsync({ modelId: model.id, params: pricingParams })
+      }
+      toast({ variant: 'success', message: 'Model updated' })
+      onClose()
+    } catch (err) {
+      toast({ variant: 'error', message: errorMessage(err, 'Update failed') })
+    }
   }
 
   return (
@@ -144,7 +163,27 @@ export function EditModelSheet({ model, onClose }: EditModelSheetProps) {
       <form id={formId} onSubmit={handleSubmit} className="space-y-6" noValidate>
         <BasicsSection values={values} onChange={patch} disabled={isPending} />
         <ConnectionSection values={values} onChange={patch} disabled={isPending} isEdit />
-        <PricingSection values={values} onChange={patch} disabled={isPending} />
+        <PricingSection values={values} onChange={patch} disabled={isPending}>
+          {pricing ? (
+            <PricingCatalogFields
+              values={values}
+              onChange={patch}
+              state={pricing}
+              onStateChange={(p) => setPricingEdits((prev) => ({ ...prev, ...p }))}
+              modelId={model.id}
+              syncedAt={pricingSettings.data?.pricing_synced_at}
+              disabled={isPending}
+            />
+          ) : pricingSettings.isError ? (
+            <p className="text-xs text-text-tertiary sm:col-span-2" role="status">
+              Catalog pricing settings unavailable: {errorMessage(pricingSettings.error, 'failed to load')}
+            </p>
+          ) : (
+            <p className="text-xs text-text-tertiary sm:col-span-2" role="status" aria-busy="true">
+              Loading catalog pricing settings…
+            </p>
+          )}
+        </PricingSection>
         <LimitsSection values={values} onChange={patch} disabled={isPending} />
         <FallbackSection
           values={values}

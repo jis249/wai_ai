@@ -342,3 +342,128 @@ def test_ssrf_literal_ranges():
     ):
         with pytest.raises(ValueError):
             validate_http_url(url)
+
+
+# --- stream start retry / fallback (phase 3) --------------------------------------
+
+
+def _stream_handler(respond, *, max_retries=1, usage=None):
+    from wai.proxy.circuit import CircuitRegistry
+
+    registry = Registry()
+    registry.add_model(
+        Model(
+            name="m",
+            strategy="priority",
+            max_retries=max_retries,
+            deployments=[
+                Deployment(name="a", base_url="http://a", priority=0),
+                Deployment(name="b", base_url="http://b", priority=1),
+            ],
+        )
+    )
+    handler = ProxyHandler(registry, usage_logger=usage, circuits=CircuitRegistry(alert=lambda *a, **k: None))
+    handler._client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+
+    async def no_sleep(_s):
+        return None
+
+    handler._sleep = no_sleep  # type: ignore[assignment]
+    return handler
+
+
+_SSE = b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n'
+
+
+def _drain(handler, body=b'{"model":"m","stream":true}', key_info=None):
+    async def run():
+        try:
+            resp = await handler.handle(_request(body, key_info), "chat/completions")
+            chunks = [c async for c in resp.body_iterator]
+            return resp, b"".join(chunks)
+        finally:
+            await handler.close()
+
+    return asyncio.run(run())
+
+
+def test_stream_start_retryable_status_falls_over_to_next_deployment():
+    hosts: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        if request.url.host == "a":
+            return httpx.Response(503, content=b'{"error":{"message":"overloaded"}}')
+        return httpx.Response(200, content=_SSE, headers={"content-type": "text/event-stream"})
+
+    usage = _FakeUsageLogger()
+    resp, body = _drain(_stream_handler(respond, usage=usage), key_info=_key_info())
+    assert hosts == ["a", "b"]
+    assert resp.status_code == 200
+    assert b"[DONE]" in body
+    # exactly one request_logs row: the successful stream
+    assert len(usage.events) == 1 and usage.events[0].status_code == 200
+
+
+def test_stream_start_connect_error_is_retried():
+    hosts: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        if request.url.host == "a":
+            raise httpx.ConnectError("refused", request=request)
+        return httpx.Response(200, content=_SSE, headers={"content-type": "text/event-stream"})
+
+    resp, body = _drain(_stream_handler(respond))
+    assert hosts == ["a", "b"]
+    assert b"hi" in body
+
+
+def test_stream_start_all_fail_returns_502_and_logs_once():
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(502, content=b"bad gateway")
+
+    usage = _FakeUsageLogger()
+    handler = _stream_handler(respond, usage=usage)
+    with pytest.raises(HTTPException) as exc:
+        _drain(handler, key_info=_key_info())
+    assert exc.value.status_code == 502
+    assert len(usage.events) == 1 and usage.events[0].status_code == 502
+    assert "upstream status 502" in usage.events[0].error
+
+
+def test_stream_non_retryable_error_passes_status_through():
+    hosts: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        return httpx.Response(
+            400, content=b'{"error":{"message":"bad request"}}', headers={"content-type": "application/json"}
+        )
+
+    usage = _FakeUsageLogger()
+    resp, body = _drain(_stream_handler(respond, usage=usage), key_info=_key_info())
+    assert hosts == ["a"]  # 4xx is not retried
+    assert resp.status_code == 400
+    assert b"bad request" in body
+    assert len(usage.events) == 1 and usage.events[0].status_code == 400
+
+
+def test_stream_mid_body_error_is_not_retried():
+    hosts: list[str] = []
+
+    class BrokenStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+            raise httpx.ReadError("connection reset")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        return httpx.Response(200, stream=BrokenStream(), headers={"content-type": "text/event-stream"})
+
+    usage = _FakeUsageLogger()
+    handler = _stream_handler(respond, usage=usage)
+    with pytest.raises(httpx.ReadError):
+        _drain(handler, key_info=_key_info())
+    assert hosts == ["a"]
+    assert len(usage.events) == 1 and usage.events[0].status_code == 200

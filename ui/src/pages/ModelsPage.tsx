@@ -8,7 +8,7 @@ import { StatCard } from '../components/ui/StatCard'
 import { Skeleton } from '../components/ui/Skeleton'
 import { EmptyState } from '../components/ui/EmptyState'
 import { ErrorState } from '../components/ui/ErrorState'
-import { Activity, CirclePause, Layers, Plus, Search } from '../components/ui/icons'
+import { Activity, CirclePause, DollarSign, Layers, Plus, Search } from '../components/ui/icons'
 import {
   useModels,
   useAccessibleModels,
@@ -27,6 +27,7 @@ import { CreateModelSheet } from './models/CreateModelSheet'
 import { DeepLinkParam } from '../components/onboarding/DeepLinkParam'
 import { EditModelSheet } from './models/EditModelSheet'
 import { DeploymentDialog } from './models/DeploymentDialog'
+import { PricingSyncSheet } from './models/PricingSyncSheet'
 import { modelMatchesSearch, nextSort, sortModels } from './models/modelHelpers'
 
 export interface ModelsPageProps {
@@ -37,6 +38,7 @@ export interface ModelsPageProps {
 export default function ModelsPage({ readOnly = false, hideHeader = false }: ModelsPageProps) {
   const [detailModel, setDetailModel] = useState<ModelResponse | null>(null)
   const [showCreate, setShowCreate] = useState(false)
+  const [showPricingSync, setShowPricingSync] = useState(false)
   const [editModel, setEditModel] = useState<ModelResponse | null>(null)
   const [deleteModelId, setDeleteModelId] = useState<string | null>(null)
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set())
@@ -128,10 +130,20 @@ export default function ModelsPage({ readOnly = false, hideHeader = false }: Mod
     })
   }
 
+  // Non-read-only mode is the system-admin registry view (the admin model API requires it).
   const addButton = readOnly ? undefined : (
-    <Button icon={<Plus className="h-4 w-4" aria-hidden="true" />} onClick={() => setShowCreate(true)}>
-      Add Model
-    </Button>
+    <div className="flex flex-wrap gap-2">
+      <Button
+        variant="secondary"
+        icon={<DollarSign className="h-4 w-4" aria-hidden="true" />}
+        onClick={() => setShowPricingSync(true)}
+      >
+        Sync pricing
+      </Button>
+      <Button icon={<Plus className="h-4 w-4" aria-hidden="true" />} onClick={() => setShowCreate(true)}>
+        Add Model
+      </Button>
+    </div>
   )
 
   const emptyState =
@@ -272,6 +284,7 @@ export default function ModelsPage({ readOnly = false, hideHeader = false }: Mod
         <>
           <DeepLinkParam name="new" onMatch={() => setShowCreate(true)} />
           {showCreate && <CreateModelSheet onClose={() => setShowCreate(false)} />}
+          {showPricingSync && <PricingSyncSheet onClose={() => setShowPricingSync(false)} />}
 
           {editModel !== null && <EditModelSheet model={editModel} onClose={() => setEditModel(null)} />}
 

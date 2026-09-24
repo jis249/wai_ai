@@ -24,6 +24,7 @@ import {
   DollarSign,
   Bot,
   Layers,
+  Bell,
   type LucideIcon,
 } from '../ui/icons'
 
@@ -102,7 +103,16 @@ export function buildNavigation(userRole: string): NavGroup[] {
     },
     {
       label: '',
-      items: [{ label: 'Organization', path: '/org', icon: Building2, end: false, keywords: ['org'] }],
+      items: [
+        { label: 'Organization', path: '/org', icon: Building2, end: false, keywords: ['org'] },
+        {
+          label: 'Alerts',
+          path: '/alerts',
+          icon: Bell,
+          minRole: 'org_admin',
+          keywords: ['notifications', 'teams', 'slack', 'webhook', 'budget'],
+        },
+      ],
     },
     {
       label: 'System',

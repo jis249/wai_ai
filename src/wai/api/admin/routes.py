@@ -33,6 +33,8 @@ from wai.api.admin import (
     users,
 )
 from wai.api.admin.handler import auth_middleware, get_handler
+from wai.api.admin import pricing as pricing_admin
+from wai.api.admin import alerts as alerts_admin
 
 API_PREFIX = "/api/v1"
 
@@ -92,6 +94,8 @@ def create_admin_router() -> APIRouter:
     authed.include_router(oidc.router, prefix=API_PREFIX)
     authed.include_router(update.router, prefix=API_PREFIX)
     authed.include_router(mcp_handler.router, prefix=API_PREFIX)
+    authed.include_router(pricing_admin.router, prefix=API_PREFIX)
+    authed.include_router(alerts_admin.router, prefix=API_PREFIX)
 
     if h.code_mode_server is not None:
         mcp_handler.register_code_mode_routes(authed)
@@ -104,4 +108,7 @@ def register_routes(app, handler=None) -> APIRouter:
     """Mount admin routes on a FastAPI app."""
     router = create_admin_router()
     app.include_router(router)
+    from wai.pricing import schedule_auto_sync
+
+    schedule_auto_sync(app, get_handler)  # no-op unless pricing.auto_sync is enabled
     return router

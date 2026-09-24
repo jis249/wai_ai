@@ -4,7 +4,7 @@ import type { ChatMessage } from './useChatStream'
 import { buildResponseFormat } from './responseFormat'
 import type { ResponseFormatWire } from './responseFormat'
 
-export type SnippetLanguage = 'curl' | 'python' | 'javascript'
+export type SnippetLanguage = 'curl' | 'python' | 'javascript' | 'anthropic'
 
 export interface SnippetMessage {
   role: 'system' | 'user' | 'assistant'
@@ -160,8 +160,45 @@ export function buildJavaScriptSnippet(p: ChatSnippetParams): string {
   ].join('\n')
 }
 
+/** Anthropic SDKs take the server origin (no `/v1`) and append `/v1/messages` themselves. */
+export function anthropicBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '')
+}
+
+/** Python snippet for the Anthropic-compatible `/v1/messages` endpoint. */
+export function buildAnthropicPythonSnippet(p: ChatSnippetParams): string {
+  const system = p.messages.filter((m) => m.role === 'system').map((m) => m.content)
+  const turns = p.messages.filter((m) => m.role !== 'system')
+  const messages = (turns.length ? turns : DEFAULT_SNIPPET_MESSAGES)
+    .map(({ role, content }) => `        {"role": ${py(role)}, "content": ${py(content)}},`)
+    .join('\n')
+  const args = [
+    `    model=${py(p.model)},`,
+    `    max_tokens=${p.maxTokens ?? 1024},`,
+    ...(system.length ? [`    system=${py(system.join('\n\n'))},`] : []),
+    ...(p.temperature !== undefined ? [`    temperature=${p.temperature},`] : []),
+    '    messages=[',
+    messages,
+    '    ],',
+  ]
+  const call = p.stream
+    ? ['with client.messages.stream(', ...args, ') as stream:', '    for text in stream.text_stream:', '        print(text, end="", flush=True)']
+    : ['message = client.messages.create(', ...args, ')', 'print(message.content[0].text)']
+  return [
+    'import anthropic',
+    '',
+    'client = anthropic.Anthropic(',
+    `    base_url=${py(anthropicBaseUrl(p.baseUrl))},`,
+    `    api_key=${py(p.apiKey)},`,
+    ')',
+    '',
+    ...call,
+  ].join('\n')
+}
+
 export function buildChatSnippet(language: SnippetLanguage, p: ChatSnippetParams): string {
   if (language === 'python') return buildPythonSnippet(p)
+  if (language === 'anthropic') return buildAnthropicPythonSnippet(p)
   if (language === 'javascript') return buildJavaScriptSnippet(p)
   return buildCurlSnippet(p)
 }

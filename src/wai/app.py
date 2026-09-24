@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -104,7 +105,10 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
             await reload_admin_model_registry(handler)
             hc = state.get("health_checker")
             if hc is not None:
-                await hc.probe_all()
+                # Probe in the background so dashboard saves don't wait on every model's health check.
+                task = asyncio.create_task(hc.probe_all())
+                state.setdefault("background_tasks", set()).add(task)
+                task.add_done_callback(state["background_tasks"].discard)
 
         from wai.proxy.access import ModelAccessCache, load_alias_cache, reload_access_cache
 
@@ -171,6 +175,11 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
         await usage_logger.start()
         state["usage_logger"] = usage_logger
 
+        from wai.alerts.service import start_alerting, stop_alerting
+
+        # Alert dispatcher + scheduled checks (budget, error rate, digest); emit_alert() is a no-op without it.
+        state["alerting"] = await start_alerting(db, enc_key, log=logger)
+
         auto_cfg = await load_auto_router_config(db, cfg.settings.auto_router)
         state["proxy_handler"] = ProxyHandler(
             registry,
@@ -185,6 +194,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
             fallback_max_depth=cfg.settings.fallback_max_depth,
             health_checker=health_checker,
             rate_limiter=rate_limiter,
+            reliability=cfg.reliability,
         )
 
         if not state["routes_registered"]:
@@ -204,6 +214,10 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
         mhc = state.get("mcp_health_checker")
         if mhc is not None:
             await mhc.stop()
+        await stop_alerting(state.get("alerting"))
+        from wai.pricing import stop_auto_sync
+
+        await stop_auto_sync()
         ul = state.get("usage_logger")
         if ul is not None:
             await ul.stop()
@@ -246,6 +260,11 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
                 auto_enabled=auto_enabled,
             )(request)
 
+        # Anthropic Messages API (/v1/messages, /v1/messages/count_tokens): must precede the catch-all.
+        from wai.proxy.anthropic import register_anthropic_routes
+
+        register_anthropic_routes(target_app, lambda: state["proxy_handler"], proxy_auth_middleware)
+
         @target_app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
         async def proxy_route(request: Request, path: str):
             await proxy_auth_middleware(request)
@@ -261,6 +280,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
                     fallback_max_depth=cfg.settings.fallback_max_depth,
                     health_checker=state.get("health_checker"),
                     rate_limiter=state.get("rate_limiter"),
+                    reliability=cfg.reliability,
                 )
                 state["proxy_handler"] = ph
                 app.state.proxy_handler = ph

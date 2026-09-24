@@ -7,7 +7,7 @@ import threading
 from dataclasses import replace
 from typing import Callable, Collection
 
-from wai.proxy.registry import Deployment, Model
+from wai.proxy.registry import Deployment, Model, same_host
 
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
@@ -30,6 +30,8 @@ def select_deployment(
     inflight: dict[str, int] | None = None,
     exclude: Collection[str] | None = None,
     rr_counters: dict[str, int] | None = None,
+    allow: Callable[[Deployment], bool] | None = None,
+    last_failure: Callable[[Deployment], float] | None = None,
 ) -> Deployment | None:
     """Pick a deployment using the model's strategy.
 
@@ -37,6 +39,10 @@ def select_deployment(
     (per-model counter), least-busy, or first. Deployments whose ``base_url`` is in
     ``exclude`` (e.g. ones that already failed this request) are skipped unless
     that would leave no candidates.
+
+    ``allow`` (circuit breaker) filters out deployments whose circuit is open. If
+    every remaining deployment is blocked, the one that failed least recently
+    (``last_failure``) is returned so traffic is never blackholed.
     """
     deps = [d for d in model.deployments if d.base_url]
     if not deps:
@@ -45,6 +51,12 @@ def select_deployment(
         remaining = [d for d in deps if d.base_url not in exclude]
         if remaining:
             deps = remaining
+    if allow is not None:
+        admitted = [d for d in deps if allow(d)]
+        if admitted:
+            deps = admitted
+        elif last_failure is not None:
+            return min(deps, key=last_failure)
     picker = rng or random
     strategy = (model.strategy or "").lower().strip()
     if strategy in {"least-busy", "least_busy", "least-latency"}:
@@ -79,7 +91,9 @@ def apply_deployment(model: Model, deployment: Deployment | None) -> Model:
         model,
         provider=deployment.provider or model.provider,
         base_url=deployment.base_url or model.base_url,
-        api_key=deployment.api_key or model.api_key,
+        # Never send the model's key to a deployment on a different host.
+        api_key=deployment.api_key
+        or (model.api_key if not deployment.base_url or same_host(deployment.base_url, model.base_url) else ""),
         azure_deployment=deployment.azure_deployment or model.azure_deployment,
         azure_api_version=deployment.azure_api_version or model.azure_api_version,
         gcp_project=deployment.gcp_project or model.gcp_project,

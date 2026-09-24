@@ -200,7 +200,12 @@ export function ConnectionSection({
 // Pricing
 // ---------------------------------------------------------------------------
 
-export function PricingSection({ values, onChange, disabled }: SectionProps) {
+export function PricingSection({
+  values,
+  onChange,
+  disabled,
+  children,
+}: SectionProps & { /** Extra full-width content (catalog pricing controls). */ children?: React.ReactNode }) {
   return (
     <FormSection title="Pricing" description="USD per 1M tokens. Leave empty for no cost tracking.">
       <Input
@@ -221,6 +226,7 @@ export function PricingSection({ values, onChange, disabled }: SectionProps) {
         placeholder="e.g. 10.00"
         disabled={disabled}
       />
+      {children}
     </FormSection>
   )
 }

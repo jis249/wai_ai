@@ -17,6 +17,17 @@ from wai.proxy.providers.azure import is_foundry_project_endpoint, requires_resp
 from wai.proxy.registry import Model
 
 
+def _emit_alert(*args: Any, **kwargs: Any) -> None:
+    try:
+        from wai.alerts import emit_alert
+    except ImportError:
+        return
+    try:
+        emit_alert(*args, **kwargs)
+    except Exception:
+        logging.getLogger("wai.health").debug("emit_alert failed", exc_info=True)
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
@@ -43,6 +54,8 @@ class ModelHealthChecker:
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self.interval_seconds = interval_seconds if interval_seconds > 0 else 60.0
+        # Set by ProxyHandler: probe results feed the per-deployment circuit breakers.
+        self.circuits: Any = None
 
     async def start(self) -> None:
         await self.probe_all()
@@ -80,6 +93,7 @@ class ModelHealthChecker:
         for row in rows:
             item = dict(row)
             name = item["name"]
+            previous = (self._health.get(name) or {}).get("status")
             try:
                 self._health[name] = await self._probe_model(item)
             except Exception as exc:
@@ -93,6 +107,51 @@ class ModelHealthChecker:
                     functional_ok=False,
                     last_error=str(exc),
                 )
+            self._after_probe(name, item.get("base_url") or "", previous, self._health[name])
+
+    def _after_probe(
+        self, name: str, base_url: str, previous: str | None, result: dict[str, Any]
+    ) -> None:
+        """Feed circuit breakers and alert on healthy<->unhealthy transitions."""
+        status = result.get("status")
+        try:
+            circuits = self.circuits
+            if circuits is None:
+                from wai.proxy.circuit import get_active_registry
+
+                circuits = get_active_registry()
+            if circuits is not None and status in ("healthy", "unhealthy"):
+                circuits.report_health(
+                    name,
+                    base_url,
+                    status == "healthy",
+                    reason=str(result.get("last_error") or "health probe failed"),
+                )
+        except Exception:
+            self.log.debug("circuit health feed failed for %s", name, exc_info=True)
+
+        if previous is None or previous == status:
+            return
+        if status == "unhealthy":
+            _emit_alert(
+                "model.health",
+                "warning",
+                f"Model unhealthy: {name}",
+                f"Health probe for {name} failed"
+                + (f": {result['last_error']}" if result.get("last_error") else "")
+                + ".",
+                data={"model": name, "previous": previous, "status": status},
+                dedupe_key=f"model.health:{name}",
+            )
+        elif previous == "unhealthy" and status == "healthy":
+            _emit_alert(
+                "model.health",
+                "info",
+                f"Model recovered: {name}",
+                f"{name} is healthy again.",
+                data={"model": name, "previous": previous, "status": status},
+                dedupe_key=f"model.health:{name}:recovered",
+            )
 
     async def _probe_model(self, row: dict[str, Any]) -> dict[str, Any]:
         if is_foundry_project_endpoint(row.get("base_url") or ""):

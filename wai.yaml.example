@@ -53,3 +53,40 @@ settings:
     login_window_minutes: 15
     invite_max_attempts: 5
     invite_window_minutes: 15
+
+# Model catalog pricing sync (Models > Sync pricing). Prices come from LiteLLM's community
+# price list. The admin UI previews changes; nothing is written until an admin applies them.
+pricing:
+  # Outbound HTTPS to GitHub raw is needed unless local_path is set.
+  source_url: https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
+  # Air-gapped installs: download the JSON elsewhere and point at the file (overrides source_url).
+  local_path: ""
+  # Daily background sync; only updates models whose pricing source is "synced".
+  auto_sync: false
+  auto_sync_interval_hours: 24
+
+# Proxy reliability: per-deployment circuit breakers and retry backoff (all optional;
+# these are the defaults). A circuit opens after consecutive upstream failures
+# (network errors, timeouts, 5xx, 429); other 4xx never count. While open, the
+# deployment is skipped; if every deployment is open the least recently failed one is
+# still tried, so traffic is never blackholed.
+reliability:
+  circuit_enabled: true
+  circuit_failure_threshold: 5
+  # Also open when this fraction of requests in the window failed (0 = off).
+  circuit_failure_rate_threshold: 0
+  circuit_window_seconds: 60
+  circuit_min_requests: 20
+  # First cooldown; doubles on each re-trip, capped at the max.
+  circuit_cooldown_seconds: 30
+  circuit_max_cooldown_seconds: 300
+  # A 429 with Retry-After opens the circuit for that long.
+  circuit_open_on_retry_after: true
+  circuit_max_entries: 2048
+  # Backoff between retries (model max_retries > 0): exponential with jitter.
+  retry_backoff_base_ms: 100
+  retry_backoff_max_ms: 2000
+  # Wait out an upstream Retry-After up to this long, else move to the next model.
+  retry_after_max_seconds: 10
+  # Total retry time when the model has no timeout (else the model timeout applies).
+  retry_budget_seconds: 60

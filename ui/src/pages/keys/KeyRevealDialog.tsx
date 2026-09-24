@@ -4,7 +4,13 @@ import { Button } from '../../components/ui/Button'
 import { CopyButton } from '../../components/ui/CopyButton'
 import { CircleCheck, TriangleAlert } from '../../components/ui/icons'
 import { SnippetTabs } from '../playground/SnippetTabs'
-import { DEFAULT_SNIPPET_MESSAGES, buildCurlSnippet, buildPythonSnippet, resolveProxyBaseUrl } from '../playground/codeSnippets'
+import {
+  DEFAULT_SNIPPET_MESSAGES,
+  buildAnthropicPythonSnippet,
+  buildCurlSnippet,
+  buildPythonSnippet,
+  resolveProxyBaseUrl,
+} from '../playground/codeSnippets'
 
 export interface KeyRevealDialogProps {
   /** Plaintext key, shown exactly once. */
@@ -46,6 +52,7 @@ export function KeyRevealDialog({
     return [
       { value: 'curl' as const, label: 'curl', code: buildCurlSnippet(params) },
       { value: 'python' as const, label: 'Python', code: buildPythonSnippet(params) },
+      { value: 'anthropic' as const, label: 'Anthropic SDK', code: buildAnthropicPythonSnippet(params) },
     ]
   }, [baseUrl, keyValue, model])
 

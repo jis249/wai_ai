@@ -56,6 +56,7 @@ const AutoRoutingPage = lazyPage(() => import('./pages/AutoRoutingPage'))
 const SetupPage = lazyPage(() => import('./pages/SetupPage'))
 const ApiAccessLayout = lazyPage(() => import('./pages/ApiAccessLayout'))
 const PlatformLayout = lazyPage(() => import('./pages/PlatformLayout'))
+const AlertsPage = lazyPage(() => import('./pages/alerts/AlertsPage'))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -167,6 +168,7 @@ export default function App() {
                       <Route path="sso" element={<OrgDetailSSOTab />} />
                     </Route>
                     <Route path="users" element={<SystemUsersPage />} />
+                    <Route path="alerts" element={<AlertsPage />} />
                     <Route path="*" element={<NotFoundPage />} />
                   </Route>
                 </Route>
