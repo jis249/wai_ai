@@ -58,7 +58,15 @@ if ($backend) {
     $backendProcess = Get-Process -Id $backendProcessId -ErrorAction SilentlyContinue
     $venvPython = Join-Path $Root ".venv\Scripts\python.exe"
 
-    if ($backendProcess -and $backendProcess.Path -eq $venvPython) {
+    # The venv python.exe is a launcher on Windows: the process listening on the port is the
+    # base interpreter it spawns, so also recognise WAI by its command line ("-m wai").
+    $commandLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $backendProcessId" -ErrorAction SilentlyContinue).CommandLine
+    $isWaiBackend = $backendProcess -and (
+        $backendProcess.Path -eq $venvPython -or
+        ($commandLine -and $commandLine -match '(^|\s)-m\s+wai(\s|$)')
+    )
+
+    if ($isWaiBackend) {
         Write-Host "Restarting WAI backend on $BackendUrl..."
         Stop-Process -Id $backendProcessId -Force
         for ($i = 0; $i -lt 20; $i++) {
@@ -70,7 +78,7 @@ if ($backend) {
         }
         Start-WaiBackend
     } else {
-        Write-Host "WAI backend already listening on port $backendPort (PID $backendProcessId)."
+        Write-Warning "Port $backendPort is held by PID $backendProcessId, which is not recognised as the WAI backend; it was NOT restarted, so new backend code is not running."
     }
 } else {
     Start-WaiBackend
