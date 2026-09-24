@@ -44,11 +44,13 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(_request: Request, exc: StarletteHTTPException):
+        headers = getattr(exc, "headers", None)
         if isinstance(exc.detail, dict) and "error" in exc.detail:
-            return JSONResponse(status_code=exc.status_code, content=exc.detail)
+            return JSONResponse(status_code=exc.status_code, content=exc.detail, headers=headers)
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": {"code": "http_error", "message": str(exc.detail)}},
+            headers=headers,
         )
 
     @app.exception_handler(RequestValidationError)
@@ -129,6 +131,8 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
             brute_force=brute_force,
             audit_logger=audit_logger,
             update_checker=UpdateChecker(),
+            # Internal MCP servers (private IPs / split-horizon DNS) need WAI_MCP_ALLOW_PRIVATE_URLS=true.
+            mcp_allow_private_urls=os.environ.get("WAI_MCP_ALLOW_PRIVATE_URLS", "").lower() in ("1", "true", "yes"),
         )
         await handler.seed_key_cache()
         await reload_admin_model_registry(handler)
@@ -142,6 +146,8 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
         )
         if state["bootstrap_result"] is not None:
             await reload_access_cache(db, access_cache)
+        # Show first-run credentials at startup (not on shutdown, where they were missed).
+        print_bootstrap_credentials(state["bootstrap_result"])
 
         state["access_cache"] = access_cache
         state["alias_cache"] = await load_alias_cache(db)
@@ -211,7 +217,6 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
         if state["proxy_handler"]:
             await state["proxy_handler"].close()
         await db.close()
-        print_bootstrap_credentials(state["bootstrap_result"])
 
     app = FastAPI(title="WAI", lifespan=lifespan)
     _register_exception_handlers(app)

@@ -50,6 +50,26 @@ class UpdateOrgRequest(BaseModel):
     guardrail_tool_denylist: str | None = None
 
 
+# Limits, spend caps and guardrails are set by system admins; org admins may only view them.
+SYSTEM_ADMIN_ORG_FIELDS = (
+    "daily_token_limit",
+    "monthly_token_limit",
+    "requests_per_minute",
+    "requests_per_day",
+    "monthly_spend_limit",
+    "guardrail_pii",
+    "guardrail_tool_denylist",
+)
+
+
+def _same_org_value(field: str, current, new) -> bool:
+    if field == "guardrail_pii":
+        return bool(int(current or 0)) == bool(new)
+    if field == "guardrail_tool_denylist":
+        return (current or "").strip() == (new or "").strip()
+    return float(current or 0) == float(new or 0)
+
+
 class OrgResponse(BaseModel):
     id: str
     name: str
@@ -181,6 +201,13 @@ async def update_org(
     if body.slug is not None and not SLUG_RE.match(body.slug):
         raise bad_request("slug must be lowercase alphanumeric with hyphens, 2-63 characters")
     fields = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None or k == "timezone"}
+    if not is_sys:
+        current = await repo.get_org_with_counts(h.db, org_id)
+        if not current:
+            raise not_found("organization not found")
+        changed = [k for k in SYSTEM_ADMIN_ORG_FIELDS if k in fields and not _same_org_value(k, current.get(k), fields[k])]
+        if changed:
+            raise forbidden("only system admins can change " + ", ".join(changed))
     if "guardrail_pii" in fields:
         fields["guardrail_pii"] = 1 if fields["guardrail_pii"] else 0
     try:
@@ -193,7 +220,7 @@ async def update_org(
         raise internal_error("failed to update organization")
     org = await repo.get_org_with_counts(h.db, org_id)
     assert org
-    await h.seed_key_cache()
+    await h.refresh_keys(org_id=org_id)
     return _org_resp(org)
 
 
@@ -209,4 +236,5 @@ async def delete_org(
         raise not_found("organization not found")
     except Exception:
         raise internal_error("failed to delete organization")
+    await h.refresh_keys(org_id=org_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -16,6 +16,7 @@ from wai.api.admin.common import (
     not_found,
 )
 from wai.api.admin.handler import get_handler, require_role
+from wai.api.admin import repository as repo
 
 router = APIRouter()
 
@@ -38,6 +39,19 @@ class AliasResponse(BaseModel):
 def _require_org_access(key_info: KeyInfo, org_id: str) -> None:
     if not has_role(key_info.role, ROLE_SYSTEM_ADMIN) and key_info.org_id != org_id:
         raise forbidden()
+
+
+async def _require_team_in_org(h, key_info: KeyInfo, org_id: str, team_id: str) -> dict:
+    """Caller must be able to act on org_id and team_id must belong to org_id (404 otherwise).
+    Non-org-admins additionally must be members of the team (same as teams._require_team_access)."""
+    _require_org_access(key_info, org_id)
+    team = await repo.get_team(h.db, team_id)
+    if not team or team["org_id"] != org_id:
+        raise not_found("team not found")
+    if not has_role(key_info.role, ROLE_ORG_ADMIN):
+        if not (key_info.user_id and await repo.is_team_member(h.db, key_info.user_id, team_id)):
+            raise not_found("team not found")
+    return team
 
 
 def _alias_resp(row) -> AliasResponse:
@@ -120,7 +134,9 @@ async def create_team_alias(
     key_info: KeyInfo = Depends(require_role(ROLE_ORG_ADMIN)),
 ) -> AliasResponse:
     h = get_handler()
-    _require_org_access(key_info, org_id)
+    await _require_team_in_org(h, key_info, org_id, team_id)
+    if not body.alias or not body.model_name:
+        raise bad_request("alias and model_name are required")
     aid = new_uuid()
     await h.db.execute(
         """INSERT INTO model_aliases (id, alias, model_name, scope_type, org_id, team_id, created_by, created_at)
@@ -139,10 +155,10 @@ async def list_team_aliases(
     key_info: KeyInfo = Depends(require_role(ROLE_ORG_ADMIN)),
 ) -> list[AliasResponse]:
     h = get_handler()
-    _require_org_access(key_info, org_id)
+    await _require_team_in_org(h, key_info, org_id, team_id)
     rows = await h.db.fetchall(
-        "SELECT * FROM model_aliases WHERE team_id = ? AND scope_type = 'team' ORDER BY alias",
-        (team_id,),
+        "SELECT * FROM model_aliases WHERE team_id = ? AND org_id = ? AND scope_type = 'team' ORDER BY alias",
+        (team_id, org_id),
     )
     return [_alias_resp(r) for r in rows]
 
@@ -157,10 +173,10 @@ async def delete_team_alias(
     from fastapi import Response
 
     h = get_handler()
-    _require_org_access(key_info, org_id)
+    await _require_team_in_org(h, key_info, org_id, team_id)
     cur = await h.db.execute(
-        "DELETE FROM model_aliases WHERE id = ? AND team_id = ? AND scope_type = 'team'",
-        (alias_id, team_id),
+        "DELETE FROM model_aliases WHERE id = ? AND team_id = ? AND org_id = ? AND scope_type = 'team'",
+        (alias_id, team_id, org_id),
     )
     await h.db.commit()
     if cur.rowcount == 0:

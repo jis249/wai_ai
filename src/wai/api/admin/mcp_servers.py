@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -9,7 +10,20 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, Field
 
-from wai.api.admin.common import KeyInfo, ROLE_MEMBER, ROLE_ORG_ADMIN, ROLE_SYSTEM_ADMIN, ROLE_TEAM_ADMIN, bad_request, new_uuid, not_found, utc_now_iso
+from wai.api.admin import repository as repo
+from wai.api.admin.common import (
+    KeyInfo,
+    ROLE_MEMBER,
+    ROLE_ORG_ADMIN,
+    ROLE_SYSTEM_ADMIN,
+    ROLE_TEAM_ADMIN,
+    bad_request,
+    forbidden,
+    has_role,
+    new_uuid,
+    not_found,
+    utc_now_iso,
+)
 from wai.api.admin.handler import get_handler, require_role
 from wai.crypto.aes import encrypt_string
 from wai.health.mcp_checker import BUILTIN_WAI_ID, BUILTIN_WAI_TOOLS
@@ -132,10 +146,11 @@ class BlocklistRequest(BaseModel):
         return [n.strip() for n in self.tool_names if n.strip()]
 
 
-def _validate_mcp_url(url: str) -> str:
+async def _validate_mcp_url(url: str) -> str:
     h = get_handler()
     try:
-        return validate_http_url(url, allow_private=h.mcp_allow_private_urls)
+        # DNS resolution blocks; keep it off the event loop.
+        return await asyncio.to_thread(validate_http_url, url, allow_private=h.mcp_allow_private_urls)
     except ValueError as exc:
         raise bad_request(str(exc)) from exc
 
@@ -172,6 +187,51 @@ async def _get_server(h, server_id: str) -> dict[str, Any]:
     if not row:
         raise not_found("mcp server not found")
     return dict(row)
+
+
+def _require_org_access(key_info: KeyInfo, org_id: str) -> None:
+    if not has_role(key_info.role, ROLE_SYSTEM_ADMIN) and key_info.org_id != org_id:
+        raise forbidden()
+
+
+async def _is_team_admin_for(h, key_info: KeyInfo, team_id: str) -> bool:
+    if not has_role(key_info.role, ROLE_TEAM_ADMIN):
+        return False
+    if key_info.team_id and key_info.team_id == team_id:
+        return True
+    return bool(key_info.user_id) and await repo.is_team_member(h.db, key_info.user_id, team_id)
+
+
+async def _require_team_admin(h, key_info: KeyInfo, org_id: str, team_id: str) -> None:
+    _require_org_access(key_info, org_id)
+    team = await repo.get_team(h.db, team_id)
+    if not team or team["org_id"] != org_id:
+        raise not_found("team not found")
+    if has_role(key_info.role, ROLE_ORG_ADMIN):
+        return
+    if not await _is_team_admin_for(h, key_info, team_id):
+        raise forbidden()
+
+
+async def _get_authorized_server(h, key_info: KeyInfo, server_id: str, *, write: bool) -> dict[str, Any]:
+    """Load a server and enforce scope: global servers are writable by system admins only;
+    org/team servers are visible within their org and writable by org admins (or the team's admins)."""
+    server = await _get_server(h, server_id)
+    if has_role(key_info.role, ROLE_SYSTEM_ADMIN):
+        return server
+    org_id = server.get("org_id")
+    team_id = server.get("team_id")
+    if not org_id and not team_id:
+        if write:
+            raise forbidden()
+        return server
+    if org_id != key_info.org_id:
+        raise not_found("mcp server not found")
+    if not write or has_role(key_info.role, ROLE_ORG_ADMIN):
+        return server
+    if team_id and await _is_team_admin_for(h, key_info, team_id):
+        return server
+    raise forbidden()
 
 
 def _encrypt_auth_token(h, server_id: str, auth_type: str, token: str) -> str | None:
@@ -266,7 +326,7 @@ async def create_mcp_server(
     h = get_handler()
     _validate_mcp_alias(body.alias)
     sid = new_uuid()
-    url = _validate_mcp_url(body.url)
+    url = await _validate_mcp_url(body.url)
     token_enc = _encrypt_auth_token(h, sid, body.auth_type, body.auth_token)
     await h.db.execute(
         """INSERT INTO mcp_servers (id, alias, name, url, auth_type, auth_header, auth_token_enc,
@@ -291,12 +351,13 @@ async def list_mcp_servers(_: KeyInfo = Depends(require_role(ROLE_SYSTEM_ADMIN))
 async def create_org_mcp_server(
     org_id: str,
     body: CreateMCPServerRequest,
-    _: KeyInfo = Depends(require_role(ROLE_ORG_ADMIN)),
+    key_info: KeyInfo = Depends(require_role(ROLE_ORG_ADMIN)),
 ) -> MCPServerResponse:
     h = get_handler()
+    _require_org_access(key_info, org_id)
     _validate_mcp_alias(body.alias)
     sid = new_uuid()
-    url = _validate_mcp_url(body.url)
+    url = await _validate_mcp_url(body.url)
     token_enc = _encrypt_auth_token(h, sid, body.auth_type, body.auth_token)
     await h.db.execute(
         """INSERT INTO mcp_servers (id, alias, name, url, org_id, auth_type, auth_header, auth_token_enc,
@@ -311,9 +372,10 @@ async def create_org_mcp_server(
 @router.get("/orgs/{org_id}/mcp-servers", response_model=list[MCPServerResponse])
 async def list_org_mcp_servers(
     org_id: str,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> list[MCPServerResponse]:
     h = get_handler()
+    _require_org_access(key_info, org_id)
     rows = await h.db.fetchall(
         """SELECT * FROM mcp_servers WHERE deleted_at IS NULL
            AND (org_id = ? OR (org_id IS NULL AND team_id IS NULL))
@@ -332,12 +394,13 @@ async def create_team_mcp_server(
     org_id: str,
     team_id: str,
     body: CreateMCPServerRequest,
-    _: KeyInfo = Depends(require_role(ROLE_TEAM_ADMIN)),
+    key_info: KeyInfo = Depends(require_role(ROLE_TEAM_ADMIN)),
 ) -> MCPServerResponse:
     h = get_handler()
+    await _require_team_admin(h, key_info, org_id, team_id)
     _validate_mcp_alias(body.alias)
     sid = new_uuid()
-    url = _validate_mcp_url(body.url)
+    url = await _validate_mcp_url(body.url)
     token_enc = _encrypt_auth_token(h, sid, body.auth_type, body.auth_token)
     await h.db.execute(
         """INSERT INTO mcp_servers (id, alias, name, url, org_id, team_id, auth_type, auth_header,
@@ -356,9 +419,10 @@ async def create_team_mcp_server(
 async def list_team_mcp_servers(
     org_id: str,
     team_id: str,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> list[MCPServerResponse]:
     h = get_handler()
+    _require_org_access(key_info, org_id)
     rows = await h.db.fetchall(
         "SELECT * FROM mcp_servers WHERE team_id = ? AND org_id = ? AND deleted_at IS NULL",
         (team_id, org_id),
@@ -369,9 +433,10 @@ async def list_team_mcp_servers(
 @router.get("/mcp-servers/{server_id}", response_model=MCPServerResponse)
 async def get_mcp_server(
     server_id: str,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> MCPServerResponse:
     h = get_handler()
+    await _get_authorized_server(h, key_info, server_id, write=False)
     return _mcp_resp(await _get_server(h, server_id))
 
 
@@ -379,13 +444,14 @@ async def get_mcp_server(
 async def update_mcp_server(
     server_id: str,
     body: UpdateMCPServerRequest,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> MCPServerResponse:
     h = get_handler()
+    await _get_authorized_server(h, key_info, server_id, write=True)
     fields = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
     auth_token = fields.pop("auth_token", None)
     if "url" in fields:
-        fields["url"] = _validate_mcp_url(fields["url"])
+        fields["url"] = await _validate_mcp_url(fields["url"])
     if "alias" in fields:
         _validate_mcp_alias(fields["alias"])
     if "code_mode_enabled" in fields:
@@ -407,9 +473,10 @@ async def update_mcp_server(
 @router.delete("/mcp-servers/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_mcp_server(
     server_id: str,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> Response:
     h = get_handler()
+    await _get_authorized_server(h, key_info, server_id, write=True)
     cur = await h.db.execute(
         "UPDATE mcp_servers SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?", (server_id,)
     )
@@ -422,9 +489,10 @@ async def delete_mcp_server(
 @router.patch("/mcp-servers/{server_id}/activate", response_model=MCPServerResponse)
 async def activate_mcp_server(
     server_id: str,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> MCPServerResponse:
     h = get_handler()
+    await _get_authorized_server(h, key_info, server_id, write=True)
     await h.db.execute("UPDATE mcp_servers SET is_active = 1 WHERE id = ?", (server_id,))
     await h.db.commit()
     return _mcp_resp(await _get_server(h, server_id))
@@ -433,9 +501,10 @@ async def activate_mcp_server(
 @router.patch("/mcp-servers/{server_id}/deactivate", response_model=MCPServerResponse)
 async def deactivate_mcp_server(
     server_id: str,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> MCPServerResponse:
     h = get_handler()
+    await _get_authorized_server(h, key_info, server_id, write=True)
     await h.db.execute("UPDATE mcp_servers SET is_active = 0 WHERE id = ?", (server_id,))
     await h.db.commit()
     return _mcp_resp(await _get_server(h, server_id))
@@ -444,11 +513,12 @@ async def deactivate_mcp_server(
 @router.post("/mcp-servers/{server_id}/test")
 async def test_mcp_server_connection(
     server_id: str,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> dict[str, Any]:
     if server_id == BUILTIN_WAI_ID:
         return {"success": True, "tools": len(BUILTIN_WAI_TOOLS)}
     h = get_handler()
+    await _get_authorized_server(h, key_info, server_id, write=True)
     server = await _get_server(h, server_id)
     status, latency_ms, last_error, _ = await probe_mcp_server(
         server,
@@ -474,11 +544,12 @@ async def test_mcp_server_connection(
 @router.get("/mcp-servers/{server_id}/blocklist")
 async def list_mcp_server_blocklist(
     server_id: str,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> list[dict[str, Any]]:
     if server_id == BUILTIN_WAI_ID:
         return []
     h = get_handler()
+    await _get_authorized_server(h, key_info, server_id, write=False)
     rows = await h.db.fetchall(
         """SELECT id, server_id, tool_name, reason, created_by, created_at
            FROM mcp_tool_blocklist WHERE server_id = ? ORDER BY tool_name""",
@@ -491,9 +562,10 @@ async def list_mcp_server_blocklist(
 async def add_mcp_server_blocklist(
     server_id: str,
     body: BlocklistRequest,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> list[dict[str, Any]]:
     h = get_handler()
+    await _get_authorized_server(h, key_info, server_id, write=True)
     names = body.resolved_names()
     if not names:
         raise bad_request("tool_name is required")
@@ -503,7 +575,7 @@ async def add_mcp_server_blocklist(
             (new_uuid(), server_id, name),
         )
     await h.db.commit()
-    return await list_mcp_server_blocklist(server_id, _)
+    return await list_mcp_server_blocklist(server_id, key_info)
 
 
 @router.delete("/mcp-servers/{server_id}/blocklist")
@@ -511,9 +583,10 @@ async def remove_mcp_server_blocklist(
     server_id: str,
     tool_name: str | None = Query(None),
     body: BlocklistRequest | None = None,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> list[dict[str, Any]]:
     h = get_handler()
+    await _get_authorized_server(h, key_info, server_id, write=True)
     names = [tool_name.strip()] if tool_name and tool_name.strip() else []
     if body is not None:
         names.extend(body.resolved_names())
@@ -526,17 +599,18 @@ async def remove_mcp_server_blocklist(
             (server_id, name),
         )
     await h.db.commit()
-    return await list_mcp_server_blocklist(server_id, _)
+    return await list_mcp_server_blocklist(server_id, key_info)
 
 
 @router.post("/mcp-servers/{server_id}/refresh-tools")
 async def refresh_mcp_server_tools(
     server_id: str,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> dict[str, int]:
     if server_id == BUILTIN_WAI_ID:
         return {"tool_count": len(BUILTIN_WAI_TOOLS)}
     h = get_handler()
+    await _get_authorized_server(h, key_info, server_id, write=True)
     server = await _get_server(h, server_id)
     tools, err = await fetch_mcp_tools(
         server,
@@ -554,7 +628,7 @@ async def refresh_mcp_server_tools(
 @router.get("/mcp-servers/{server_id}/tools")
 async def list_mcp_server_tools(
     server_id: str,
-    _: KeyInfo = Depends(require_role(ROLE_MEMBER)),
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> list[dict[str, Any]]:
     if server_id == BUILTIN_WAI_ID:
         return [
@@ -562,6 +636,7 @@ async def list_mcp_server_tools(
             for t in BUILTIN_WAI_TOOLS
         ]
     h = get_handler()
+    await _get_authorized_server(h, key_info, server_id, write=False)
     rows = await h.db.fetchall(
         """SELECT t.name, t.description,
                   CASE WHEN b.tool_name IS NOT NULL THEN 1 ELSE 0 END AS blocked

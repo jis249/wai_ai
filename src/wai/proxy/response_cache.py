@@ -5,6 +5,21 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
+from typing import Mapping
+
+
+def cache_bypass_requested(headers: Mapping[str, str]) -> bool:
+    """True when the client asked to skip the response cache.
+
+    Honors ``Cache-Control: no-cache`` / ``no-store`` and ``X-WAI-Cache: no-cache`` /
+    ``no-store`` / ``bypass`` / ``off``.
+    """
+    wai = (headers.get("x-wai-cache") or "").strip().lower()
+    if wai in {"no-cache", "no-store", "bypass", "off", "false", "0"}:
+        return True
+    cc = (headers.get("cache-control") or "").lower()
+    directives = {d.strip().split("=", 1)[0] for d in cc.split(",")}
+    return bool(directives & {"no-cache", "no-store"})
 
 
 class ResponseCache:
@@ -14,8 +29,11 @@ class ResponseCache:
         self._lock = threading.Lock()
         self._store: dict[str, tuple[float, bytes, int, dict[str, str]]] = {}
 
-    def make_key(self, model: str, body: bytes) -> str:
-        digest = hashlib.sha256(model.encode() + b"\0" + body).hexdigest()
+    def make_key(self, model: str, body: bytes, *, scope: str = "") -> str:
+        """Build a cache key. ``scope`` (the tenant/org id) keeps orgs from sharing entries."""
+        digest = hashlib.sha256(
+            scope.encode() + b"\0" + model.encode() + b"\0" + body
+        ).hexdigest()
         return digest
 
     def get(self, key: str) -> tuple[bytes, int, dict[str, str]] | None:

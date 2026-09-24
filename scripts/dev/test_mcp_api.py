@@ -1,11 +1,17 @@
 import asyncio
 import json
+import os
+import sys
 import urllib.request
 
 async def main():
+    email = os.environ.get("WAI_ADMIN_EMAIL", "admin@wai.local")
+    password = os.environ.get("WAI_ADMIN_PASSWORD", "")
+    if not password:
+        sys.exit("set WAI_ADMIN_PASSWORD (and optionally WAI_ADMIN_EMAIL) to run this script")
     req = urllib.request.Request(
         "http://127.0.0.1:8090/api/v1/auth/login",
-        data=json.dumps({"email": "admin@wai.local", "password": "WaiAdmin123!"}).encode(),
+        data=json.dumps({"email": email, "password": password}).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )

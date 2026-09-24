@@ -20,13 +20,14 @@ def test_select_deployment_priority():
         name="m",
         strategy="priority",
         deployments=[
-            Deployment(name="low", base_url="http://a", priority=1),
-            Deployment(name="high", base_url="http://b", priority=10),
+            Deployment(name="backup", base_url="http://b", priority=10),
+            Deployment(name="primary", base_url="http://a", priority=1),
         ],
     )
+    # Lower priority value = higher priority (migration 0003).
     dep = select_deployment(model)
     assert dep is not None
-    assert dep.name == "high"
+    assert dep.name == "primary"
 
 
 def test_select_deployment_weighted_deterministic():

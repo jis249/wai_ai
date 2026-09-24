@@ -12,7 +12,9 @@ from wai.api.admin.common import (
     KeyInfo,
     ROLE_MEMBER,
     ROLE_ORG_ADMIN,
+    ROLE_RANK,
     ROLE_SYSTEM_ADMIN,
+    api_error,
     bad_request,
     conflict,
     forbidden,
@@ -21,7 +23,7 @@ from wai.api.admin.common import (
     not_found,
     parse_pagination,
 )
-from wai.api.admin.handler import get_handler, require_role
+from wai.api.admin.handler import auth_middleware, get_handler, require_role
 from wai.api.admin import repository as repo
 
 router = APIRouter()
@@ -38,6 +40,9 @@ class UpdateUserRequest(BaseModel):
     email: str | None = None
     display_name: str | None = None
     password: str | None = None
+    # Self-service password change (ProfilePage sends current_password + new_password).
+    current_password: str | None = None
+    new_password: str | None = None
     is_system_admin: bool | None = None
 
 
@@ -150,20 +155,52 @@ async def get_user(
     return _user_resp(user)
 
 
+async def _authorize_user_update(h: Any, key_info: KeyInfo, user_id: str, body: UpdateUserRequest) -> bool:
+    """Enforce who may change what on PATCH /users/{id}. Returns True when the caller edits itself.
+
+    - System admins may edit anyone (password changes on themselves still need current_password).
+    - Everyone else may change their own display name, email and password (email/password need
+      current_password) but never is_system_admin.
+    - An org admin may change only the display name of another user, and only when that user is not
+      a system admin, has a strictly lower role in the caller's org and belongs to no other org.
+    """
+    is_self = bool(key_info.user_id) and key_info.user_id == user_id
+    caller_is_sysadmin = has_role(key_info.role, ROLE_SYSTEM_ADMIN)
+    if body.is_system_admin is not None and not caller_is_sysadmin:
+        raise forbidden("only system admins may change is_system_admin")
+    if caller_is_sysadmin or is_self:
+        return is_self
+    if not has_role(key_info.role, ROLE_ORG_ADMIN):
+        raise forbidden()
+    target = await repo.get_user(h.db, user_id)
+    if not target:
+        raise not_found("user not found")
+    memberships = await repo.list_user_org_roles(h.db, user_id)
+    if not key_info.org_id or key_info.org_id not in memberships:
+        raise not_found("user not found")
+    if body.email is not None or body.password is not None or body.new_password is not None:
+        raise forbidden("only system admins may change another user's email or password")
+    if target["is_system_admin"]:
+        raise forbidden("cannot modify a system admin")
+    target_rank = ROLE_RANK.get(memberships[key_info.org_id], ROLE_RANK[ROLE_SYSTEM_ADMIN])
+    if target_rank >= ROLE_RANK.get(key_info.role, -1):
+        raise forbidden("cannot modify a user with an equal or higher role")
+    if any(org_id != key_info.org_id for org_id in memberships):
+        raise forbidden("user belongs to other organizations; ask a system admin")
+    return False
+
+
 @router.patch("/users/{user_id}", response_model=UserResponse)
 async def update_user(
     user_id: str,
     body: UpdateUserRequest,
-    key_info: KeyInfo = Depends(require_role(ROLE_ORG_ADMIN)),
+    key_info: KeyInfo = Depends(auth_middleware),
 ) -> UserResponse:
     h = get_handler()
-    if not has_role(key_info.role, ROLE_SYSTEM_ADMIN):
-        try:
-            await repo.get_user_org_role(h.db, user_id, key_info.org_id)
-        except repo.NotFoundError:
-            raise not_found("user not found")
-    if body.is_system_admin is not None and not has_role(key_info.role, ROLE_SYSTEM_ADMIN):
-        raise forbidden("only system admins may change is_system_admin")
+    is_self = await _authorize_user_update(h, key_info, user_id, body)
+    if body.password is not None and body.new_password is not None:
+        raise bad_request("send either password or new_password, not both")
+    new_password = body.new_password if body.new_password is not None else body.password
     fields: dict[str, Any] = {}
     if body.email is not None:
         trimmed = body.email.strip()
@@ -177,10 +214,19 @@ async def update_user(
         fields["display_name"] = trimmed
     if body.is_system_admin is not None:
         fields["is_system_admin"] = 1 if body.is_system_admin else 0
-    if body.password is not None:
-        if len(body.password) < 8:
+    if new_password is not None:
+        if len(new_password) < 8:
             raise bad_request("password must be at least 8 characters")
-        fields["password_hash"] = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode()
+        fields["password_hash"] = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+    # Self-service changes of credentials (email = login id, password) must re-prove the current password.
+    if is_self and ("password_hash" in fields or "email" in fields):
+        current_hash = await repo.get_user_password_hash_by_id(h.db, user_id)
+        if not current_hash:
+            raise bad_request("this account has no local password; credentials are managed by SSO")
+        if not body.current_password:
+            raise bad_request("current_password is required")
+        if not bcrypt.checkpw(body.current_password.encode(), current_hash.encode()):
+            raise api_error(400, "invalid_current_password", "current password is incorrect")
     try:
         user = await repo.update_user(h.db, user_id, fields)
     except repo.NotFoundError:
@@ -189,6 +235,11 @@ async def update_user(
         raise conflict("email already in use")
     except Exception:
         raise internal_error("failed to update user")
+    if "is_system_admin" in fields:
+        await h.refresh_keys(user_id=user_id)
+    if not is_self and ("password_hash" in fields or "email" in fields):
+        # Admin reset of someone else's credentials: kill that user's existing web sessions.
+        await h.revoke_user_sessions(user_id)
     return _user_resp(user)
 
 
@@ -204,4 +255,6 @@ async def delete_user(
         raise not_found("user not found")
     except Exception:
         raise internal_error("failed to delete user")
+    # repo.delete_user revokes sessions in the DB; drop every cached key the user owned.
+    await h.refresh_keys(user_id=user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

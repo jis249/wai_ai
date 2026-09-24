@@ -23,8 +23,8 @@ _USAGE_EVENT_SQL = """INSERT INTO usage_events (
 
 _REQUEST_LOG_SQL = """INSERT INTO request_logs (
        id, created_at, org_id, key_id, model_name, requested_model, status_code,
-       prompt_tokens, completion_tokens, cost_usd, latency_ms, cache_hit
-   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+       prompt_tokens, completion_tokens, cost_usd, latency_ms, cache_hit, error
+   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
 
 def _utc_now_iso() -> str:
@@ -140,6 +140,10 @@ class UsageLogger:
                 event_rows: list[tuple] = []
                 created_at = _utc_now_iso()
                 for ev in batch:
+                    if not ev.is_success:
+                        # Failed requests only go to request_logs (below); usage_events and
+                        # the hourly rollups keep their successful-request semantics.
+                        continue
                     event_rows.append(
                         (
                             new_uuid(),
@@ -188,6 +192,7 @@ class UsageLogger:
 
                 if event_rows:
                     await tx.executemany(_USAGE_EVENT_SQL, event_rows)
+                if batch:
                     log_rows = [
                         (
                             new_uuid(),
@@ -202,6 +207,7 @@ class UsageLogger:
                             ev.cost_estimate or 0.0,
                             ev.request_duration_ms,
                             1 if ev.cache_hit else 0,
+                            (ev.error or "")[:500],
                         )
                         for ev in batch
                     ]

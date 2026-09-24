@@ -33,6 +33,12 @@ class UsageEvent:
     status_code: int
     request_id: str
     cache_hit: bool = False
+    # Trimmed upstream/proxy error message for non-2xx requests ("" on success).
+    error: str = ""
+
+    @property
+    def is_success(self) -> bool:
+        return 200 <= self.status_code < 300
 
 
 def extract_usage(body: bytes) -> UsageInfo:

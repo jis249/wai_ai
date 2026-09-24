@@ -34,7 +34,10 @@ export default function SetupPage({ embedded = false }: { embedded?: boolean }) 
   const { data: status, error, refetch, isFetching } = useQuery({
     queryKey: ['setup-status'],
     queryFn: async () => {
-      const res = await fetch('/api/v1/setup/status')
+      // Send the session when present so system admins get the unredacted checklist.
+      const res = await fetch('/api/v1/setup/status', {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      })
       if (!res.ok) throw new Error(res.statusText)
       return res.json() as Promise<SetupStatus>
     },

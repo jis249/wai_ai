@@ -8,7 +8,7 @@ import os
 import re
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -129,11 +129,38 @@ def utc_now_iso() -> str:
 # --- API errors (match Go apierror envelope) ---
 
 
-def api_error(status: int, code: str, message: str, request_id: str = "") -> HTTPException:
-    detail: dict[str, Any] = {"error": {"code": code, "message": message}}
+# OpenAI-compatible error "type" per HTTP status.
+_ERROR_TYPES = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    403: "permission_error",
+    404: "not_found_error",
+    409: "invalid_request_error",
+    410: "invalid_request_error",
+    429: "rate_limit_error",
+}
+
+
+def api_error(
+    status: int,
+    code: str,
+    message: str,
+    request_id: str = "",
+    *,
+    error_type: str | None = None,
+    headers: dict[str, str] | None = None,
+) -> HTTPException:
+    """Error envelope {"error": {"message", "type", "code"}} (OpenAI-compatible, UI reads error.message)."""
+    detail: dict[str, Any] = {
+        "error": {
+            "code": code,
+            "message": message,
+            "type": error_type or _ERROR_TYPES.get(status, "api_error" if status >= 500 else "invalid_request_error"),
+        }
+    }
     if request_id:
         detail["error"]["request_id"] = request_id
-    return HTTPException(status_code=status, detail=detail)
+    return HTTPException(status_code=status, detail=detail, headers=headers)
 
 
 def bad_request(msg: str) -> HTTPException:
@@ -160,12 +187,33 @@ def internal_error(msg: str) -> HTTPException:
     return api_error(500, "internal_error", msg)
 
 
-def limit_reached(msg: str) -> HTTPException:
-    return api_error(403, "limit_reached", msg)
+def _seconds_until_window_reset(msg: str, now: datetime | None = None) -> int:
+    """Best-effort Retry-After for a limit message (minute / day / month windows, UTC)."""
+    now = now or datetime.now(timezone.utc)
+    text = msg.lower()
+    if "minute" in text:
+        nxt = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    elif "month" in text:
+        first = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        nxt = first.replace(year=first.year + 1, month=1) if first.month == 12 else first.replace(month=first.month + 1)
+    elif "day" in text or "daily" in text:
+        nxt = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    else:
+        return 60
+    return max(1, int((nxt - now).total_seconds() + 0.999))
+
+
+def limit_reached(msg: str, retry_after: int | None = None) -> HTTPException:
+    """Rate/token limit hit: 429 with Retry-After (seconds until the limit window resets)."""
+    seconds = retry_after if retry_after is not None else _seconds_until_window_reset(msg)
+    return api_error(429, "limit_reached", msg, headers={"Retry-After": str(max(1, int(seconds)))})
 
 
 def budget_exceeded(msg: str) -> HTTPException:
-    return api_error(429, "budget_exceeded", msg)
+    return api_error(
+        429, "budget_exceeded", msg,
+        headers={"Retry-After": str(_seconds_until_window_reset("month"))},
+    )
 
 
 def rate_limited(msg: str = "too many requests") -> HTTPException:

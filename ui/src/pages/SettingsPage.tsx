@@ -54,9 +54,10 @@ function formFromOrg(org: OrgResponse): FormState {
 interface OrgSettingsFormProps {
   org: OrgResponse
   readOnly: boolean
+  limitsReadOnly: boolean
 }
 
-function OrgSettingsForm({ org, readOnly }: OrgSettingsFormProps) {
+function OrgSettingsForm({ org, readOnly, limitsReadOnly }: OrgSettingsFormProps) {
   const updateOrg = useUpdateOrg(org.id)
   const { toast } = useToast()
 
@@ -160,6 +161,11 @@ function OrgSettingsForm({ org, readOnly }: OrgSettingsFormProps) {
           </span>
           <div className="h-px flex-1 bg-border" />
         </div>
+        {limitsReadOnly && !readOnly && (
+          <p className="text-xs text-text-tertiary mb-4">
+            Limits, spend caps and guardrails are managed by your system administrator.
+          </p>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input
@@ -169,7 +175,7 @@ function OrgSettingsForm({ org, readOnly }: OrgSettingsFormProps) {
             value={form.dailyTokenLimit}
             onChange={patch('dailyTokenLimit')}
             description="0 = unlimited"
-            disabled={readOnly || updateOrg.isPending}
+            disabled={limitsReadOnly || updateOrg.isPending}
           />
           <Input
             label="Monthly Token Limit"
@@ -178,7 +184,7 @@ function OrgSettingsForm({ org, readOnly }: OrgSettingsFormProps) {
             value={form.monthlyTokenLimit}
             onChange={patch('monthlyTokenLimit')}
             description="0 = unlimited"
-            disabled={readOnly || updateOrg.isPending}
+            disabled={limitsReadOnly || updateOrg.isPending}
           />
           <Input
             label="Requests / Minute"
@@ -187,7 +193,7 @@ function OrgSettingsForm({ org, readOnly }: OrgSettingsFormProps) {
             value={form.requestsPerMinute}
             onChange={patch('requestsPerMinute')}
             description="0 = unlimited"
-            disabled={readOnly || updateOrg.isPending}
+            disabled={limitsReadOnly || updateOrg.isPending}
           />
           <Input
             label="Requests / Day"
@@ -196,7 +202,7 @@ function OrgSettingsForm({ org, readOnly }: OrgSettingsFormProps) {
             value={form.requestsPerDay}
             onChange={patch('requestsPerDay')}
             description="0 = unlimited"
-            disabled={readOnly || updateOrg.isPending}
+            disabled={limitsReadOnly || updateOrg.isPending}
           />
           <Input
             label="Monthly spend limit (USD)"
@@ -206,7 +212,7 @@ function OrgSettingsForm({ org, readOnly }: OrgSettingsFormProps) {
             value={form.monthlySpendLimit}
             onChange={patch('monthlySpendLimit')}
             description="Hard block when estimated spend reaches this amount. 0 = unlimited"
-            disabled={readOnly || updateOrg.isPending}
+            disabled={limitsReadOnly || updateOrg.isPending}
           />
         </div>
         <div className="space-y-3 pt-2">
@@ -214,14 +220,14 @@ function OrgSettingsForm({ org, readOnly }: OrgSettingsFormProps) {
             checked={form.guardrailPii}
             onChange={(checked) => setForm((prev) => ({ ...prev, guardrailPii: checked }))}
             label="Block obvious PII (SSN / card numbers) in prompts"
-            disabled={readOnly || updateOrg.isPending}
+            disabled={limitsReadOnly || updateOrg.isPending}
           />
           <Input
             label="Denied tool names"
             value={form.toolDenylist}
             onChange={patch('toolDenylist')}
             description="Comma-separated function/tool names to block"
-            disabled={readOnly || updateOrg.isPending}
+            disabled={limitsReadOnly || updateOrg.isPending}
           />
         </div>
       </div>
@@ -253,9 +259,10 @@ function OrgSettingsForm({ org, readOnly }: OrgSettingsFormProps) {
 interface OrgSettingsCardProps {
   orgId: string
   readOnly: boolean
+  limitsReadOnly: boolean
 }
 
-function OrgSettingsCard({ orgId, readOnly }: OrgSettingsCardProps) {
+function OrgSettingsCard({ orgId, readOnly, limitsReadOnly }: OrgSettingsCardProps) {
   const { data: org, isLoading } = useOrg(orgId)
 
   return (
@@ -279,7 +286,7 @@ function OrgSettingsCard({ orgId, readOnly }: OrgSettingsCardProps) {
           </div>
         </div>
       ) : (
-        <OrgSettingsForm key={org.id} org={org} readOnly={readOnly} />
+        <OrgSettingsForm key={org.id} org={org} readOnly={readOnly} limitsReadOnly={limitsReadOnly} />
       )}
     </div>
   )
@@ -293,10 +300,11 @@ export default function SettingsPage() {
   const { data: me } = useMe()
   const orgId = me?.org_id ?? ''
   const readOnly = !canEditOrg(me?.role)
+  const limitsReadOnly = me?.role !== 'system_admin'
 
   return (
     <div className="max-w-2xl space-y-6">
-      {orgId && <OrgSettingsCard orgId={orgId} readOnly={readOnly} />}
+      {orgId && <OrgSettingsCard orgId={orgId} readOnly={readOnly} limitsReadOnly={limitsReadOnly} />}
     </div>
   )
 }

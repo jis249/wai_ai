@@ -18,6 +18,8 @@ const SSO_ERROR_MESSAGES: Record<string, string> = {
   not_provisioned: 'Your account has not been provisioned. Please contact your administrator.',
   domain_not_allowed: 'Your email domain is not authorized for SSO login.',
   sso_error: 'SSO authentication failed. Please try again.',
+  email_not_verified: 'Your SSO email address is not verified. Verify it with your identity provider and try again.',
+  provision_no_default_org: 'SSO sign-up is not configured yet. Please contact your administrator.',
 }
 
 export default function LoginPage() {

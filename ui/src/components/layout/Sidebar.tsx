@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { NavLink, Link, useLocation } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useMe } from '../../hooks/useMe'
+import apiClient from '../../api/client'
 import { LOCAL_STORAGE_KEY } from '../../lib/constants'
 import { ThemeToggle } from '../ui/ThemeToggle'
 
@@ -350,7 +351,9 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
             Profile
           </Link>
           <button
-            onClick={() => {
+            onClick={async () => {
+              // Revoke the session server-side; ignore failures so logout always completes.
+              await apiClient<void>('/auth/logout', { method: 'POST' }).catch(() => {})
               localStorage.removeItem(LOCAL_STORAGE_KEY)
               queryClient.clear()
               window.location.href = '/login'

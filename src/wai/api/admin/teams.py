@@ -195,6 +195,7 @@ async def update_team(
         raise internal_error("failed to update team")
     team = await repo.get_team_with_counts(h.db, existing["id"])
     assert team
+    await h.refresh_keys(team_id=existing["id"])
     return _team_resp(team)
 
 
@@ -212,4 +213,5 @@ async def delete_team(
         raise not_found("team not found")
     except Exception:
         raise internal_error("failed to delete team")
+    await h.refresh_keys(team_id=team["id"])
     return Response(status_code=status.HTTP_204_NO_CONTENT)

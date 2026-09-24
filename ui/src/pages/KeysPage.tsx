@@ -671,9 +671,11 @@ interface EditKeyDialogProps {
   apiKey: APIKeyResponse
   onClose: () => void
   orgId: string
+  // Limits and expiry are admin-managed; the API rejects changes from other roles.
+  canEditLimits: boolean
 }
 
-function EditKeyDialog({ apiKey, onClose, orgId }: EditKeyDialogProps) {
+function EditKeyDialog({ apiKey, onClose, orgId, canEditLimits }: EditKeyDialogProps) {
   const [name, setName] = useState(apiKey.name)
   const [expiresIn, setExpiresIn] = useState('keep')
   const [dailyTokenLimit, setDailyTokenLimit] = useState(
@@ -764,49 +766,57 @@ function EditKeyDialog({ apiKey, onClose, orgId }: EditKeyDialogProps) {
           error={nameError}
           disabled={updateKey.isPending}
         />
-        <Select
-          label="Expires At"
-          options={EDIT_EXPIRES_OPTIONS}
-          value={expiresIn}
-          onChange={setExpiresIn}
-          disabled={updateKey.isPending}
-        />
-        <div className="grid grid-cols-2 gap-4">
-          <Input
-            label="Daily Token Limit"
-            type="number"
-            value={dailyTokenLimit}
-            onChange={(e) => setDailyTokenLimit(e.target.value)}
-            placeholder="0 = unlimited"
-            disabled={updateKey.isPending}
-          />
-          <Input
-            label="Monthly Token Limit"
-            type="number"
-            value={monthlyTokenLimit}
-            onChange={(e) => setMonthlyTokenLimit(e.target.value)}
-            placeholder="0 = unlimited"
-            disabled={updateKey.isPending}
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <Input
-            label="Requests per Minute"
-            type="number"
-            value={requestsPerMinute}
-            onChange={(e) => setRequestsPerMinute(e.target.value)}
-            placeholder="0 = unlimited"
-            disabled={updateKey.isPending}
-          />
-          <Input
-            label="Requests per Day"
-            type="number"
-            value={requestsPerDay}
-            onChange={(e) => setRequestsPerDay(e.target.value)}
-            placeholder="0 = unlimited"
-            disabled={updateKey.isPending}
-          />
-        </div>
+        {canEditLimits ? (
+          <>
+            <Select
+              label="Expires At"
+              options={EDIT_EXPIRES_OPTIONS}
+              value={expiresIn}
+              onChange={setExpiresIn}
+              disabled={updateKey.isPending}
+            />
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Daily Token Limit"
+                type="number"
+                value={dailyTokenLimit}
+                onChange={(e) => setDailyTokenLimit(e.target.value)}
+                placeholder="0 = unlimited"
+                disabled={updateKey.isPending}
+              />
+              <Input
+                label="Monthly Token Limit"
+                type="number"
+                value={monthlyTokenLimit}
+                onChange={(e) => setMonthlyTokenLimit(e.target.value)}
+                placeholder="0 = unlimited"
+                disabled={updateKey.isPending}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="Requests per Minute"
+                type="number"
+                value={requestsPerMinute}
+                onChange={(e) => setRequestsPerMinute(e.target.value)}
+                placeholder="0 = unlimited"
+                disabled={updateKey.isPending}
+              />
+              <Input
+                label="Requests per Day"
+                type="number"
+                value={requestsPerDay}
+                onChange={(e) => setRequestsPerDay(e.target.value)}
+                placeholder="0 = unlimited"
+                disabled={updateKey.isPending}
+              />
+            </div>
+          </>
+        ) : (
+          <p className="text-xs text-text-tertiary">
+            Expiry and limits are managed by your organization admin.
+          </p>
+        )}
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="secondary" onClick={onClose} disabled={updateKey.isPending}>
             Cancel
@@ -1098,6 +1108,7 @@ export default function KeysPage({ hideHeader = false }: { hideHeader?: boolean 
           apiKey={editKey}
           onClose={() => setEditKey(null)}
           orgId={orgId}
+          canEditLimits={canManageAnyKey}
         />
       )}
 

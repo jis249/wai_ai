@@ -13,6 +13,7 @@ from wai.api.admin.common import (
     ROLE_MEMBER,
     ROLE_SYSTEM_ADMIN,
     bad_request,
+    has_role,
     internal_error,
     new_uuid,
     not_found,
@@ -190,11 +191,25 @@ async def _fetch_model(h, model_id: str) -> dict[str, Any]:
 
 
 @router.get("/models/health", response_model=ModelHealthResponse)
-async def get_model_health(_: KeyInfo = Depends(require_role(ROLE_MEMBER))) -> ModelHealthResponse:
+async def get_model_health(key_info: KeyInfo = Depends(require_role(ROLE_MEMBER))) -> ModelHealthResponse:
     h = get_handler()
     if h.health_checker is None:
         return ModelHealthResponse(models=[])
-    return ModelHealthResponse(models=h.health_checker.get_all_health())
+    items = h.health_checker.get_all_health()
+    if has_role(key_info.role, ROLE_SYSTEM_ADMIN):
+        return ModelHealthResponse(models=items)
+    # Non-system-admins only see models their org is granted (org-level allowlist, same
+    # cache as /me/models), and never the raw upstream error text.
+    visible: list[dict[str, Any]] = []
+    for item in items:
+        name = item.get("name") or ""
+        if not name or not h.access_cache.check(key_info.org_id, "", "", name):
+            continue
+        redacted = dict(item)
+        if redacted.get("last_error"):
+            redacted["last_error"] = ""
+        visible.append(redacted)
+    return ModelHealthResponse(models=visible)
 
 
 @router.get("/me/models", response_model=AccessibleModelsListResponse)

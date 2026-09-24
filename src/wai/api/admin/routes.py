@@ -59,6 +59,7 @@ def create_admin_router() -> APIRouter:
     # Authenticated /api/v1 group
     authed = APIRouter(dependencies=[Depends(auth_middleware)])
 
+    authed.add_api_route(f"{API_PREFIX}/auth/logout", auth.logout, methods=["POST"], status_code=204, tags=["auth"])
     authed.add_api_route(f"{API_PREFIX}/me", auth.me, methods=["GET"], tags=["auth"])
     authed.add_api_route(f"{API_PREFIX}/me/available-models", auth.available_models, methods=["GET"], tags=["auth"])
     authed.include_router(dashboard.router, prefix=API_PREFIX)

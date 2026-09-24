@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import json
 from urllib.parse import urlparse
 
@@ -188,7 +190,11 @@ async def test_sso_connection(
         raise bad_request("issuer must be a valid https URL")
     if u.scheme == "http" and u.hostname not in ("localhost", "127.0.0.1"):
         raise bad_request("issuer must use https (http is only allowed for localhost)")
-    if u.hostname and _is_private_host(u.hostname):
+    if (
+        u.hostname
+        and u.hostname not in ("localhost", "127.0.0.1")
+        and await asyncio.to_thread(is_private_host, u.hostname)
+    ):
         raise bad_request("issuer URL must not point to a private address")
     discovery = body.issuer.rstrip("/") + "/.well-known/openid-configuration"
     try:

@@ -24,7 +24,7 @@ from wai.proxy.auto_router import (
 from wai.proxy.providers import get_adapter
 from wai.proxy.registry import ERR_MODEL_NOT_FOUND, Model, Registry
 from wai.proxy.guardrail import apply_org_guardrails
-from wai.proxy.response_cache import ResponseCache
+from wai.proxy.response_cache import ResponseCache, cache_bypass_requested
 from wai.proxy.routing import (
     RETRYABLE_STATUS,
     apply_deployment,
@@ -56,6 +56,41 @@ def is_allowed_path(path: str) -> bool:
     if p in ALLOWED_PATHS:
         return True
     return p.startswith("images/") or p.startswith("audio/") or p.startswith("models/")
+
+
+_ERROR_MESSAGE_MAX = 500
+
+
+def _error_message(content: bytes | None) -> str:
+    """Extract a short error message from an upstream error body (OpenAI shape or raw)."""
+    if not content:
+        return ""
+    text = content.decode("utf-8", errors="replace")
+    try:
+        doc = json.loads(text)
+    except json.JSONDecodeError:
+        doc = None
+    if isinstance(doc, dict):
+        err = doc.get("error")
+        if isinstance(err, dict) and isinstance(err.get("message"), str):
+            text = err["message"]
+        elif isinstance(err, str):
+            text = err
+        elif isinstance(doc.get("message"), str):
+            text = doc["message"]
+    text = " ".join(text.split())
+    return text[:_ERROR_MESSAGE_MAX]
+
+
+def request_timeout(model: Model) -> httpx.Timeout | Any:
+    """Per-model upstream timeout, or the client default when the model sets none."""
+    try:
+        seconds = model.timeout.total_seconds() if model.timeout else 0.0
+    except AttributeError:
+        seconds = float(model.timeout or 0)
+    if seconds > 0:
+        return httpx.Timeout(seconds, connect=min(10.0, seconds))
+    return httpx.USE_CLIENT_DEFAULT
 
 
 def mutate_request_body(body: bytes, canonical_model: str, inject_usage: bool) -> bytes:
@@ -163,12 +198,19 @@ class ProxyHandler:
             if healthy:
                 chain = healthy
         last_exc: Exception | None = None
+        last_model: Model = model
         for idx, candidate in enumerate(chain):
-            deployed = apply_deployment(candidate, select_deployment(candidate, inflight=self._inflight))
             retries = max(int(candidate.max_retries or 0), 0)
             attempts = retries + 1
-            inflight_key = deployed.base_url or deployed.name
+            failed: set[str] = set()
             for attempt in range(attempts):
+                # Reselect per attempt so retries move off deployments that already failed.
+                deployed = apply_deployment(
+                    candidate,
+                    select_deployment(candidate, inflight=self._inflight, exclude=failed),
+                )
+                last_model = deployed
+                inflight_key = deployed.base_url or deployed.name
                 self._inflight[inflight_key] = self._inflight.get(inflight_key, 0) + 1
                 try:
                     return await self._forward(
@@ -185,6 +227,8 @@ class ProxyHandler:
                     )
                 except (httpx.RequestError, httpx.HTTPStatusError) as exc:
                     last_exc = exc
+                    if deployed.base_url:
+                        failed.add(deployed.base_url)
                     body_preview = b""
                     if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
                         body_preview = exc.response.content or b""
@@ -209,6 +253,21 @@ class ProxyHandler:
             if idx < len(chain) - 1:
                 self.log.info("falling back from %s to %s", candidate.name, chain[idx + 1].name)
 
+        err_msg = str(last_exc) if last_exc else "upstream unavailable"
+        if isinstance(last_exc, httpx.HTTPStatusError) and last_exc.response is not None:
+            err_msg = f"upstream status {last_exc.response.status_code}: " + _error_message(
+                last_exc.response.content
+            )
+        self._log_error(
+            key_info,
+            last_model,
+            status_code=502,
+            error=err_msg,
+            started=started,
+            request_id=getattr(request.state, "request_id", "") or "",
+            requested_model_name=requested_model_name,
+            upstream_path=upstream_path,
+        )
         raise api_error(502, "bad_gateway", str(last_exc) if last_exc else "upstream unavailable")
 
     async def _forward(
@@ -249,8 +308,11 @@ class ProxyHandler:
             not stream
             and method == "POST"
             and upstream_path in {"chat/completions", "completions", "embeddings"}
+            and not cache_bypass_requested(request.headers)
         ):
-            cache_key = self.response_cache.make_key(model.name, fwd_body)
+            # Tenant-scoped: identical bodies from different orgs never share entries.
+            cache_scope = key_info.org_id if key_info is not None else ""
+            cache_key = self.response_cache.make_key(model.name, fwd_body, scope=cache_scope)
             cached = self.response_cache.get(cache_key)
             if cached is not None:
                 content, status_code, cached_headers = cached
@@ -289,9 +351,16 @@ class ProxyHandler:
                 request_id=request_id,
                 started=started,
                 extra_headers=extra_headers,
+                upstream_path=upstream_path,
             )
 
-        resp = await self._client.request(method, upstream_url, content=fwd_body, headers=headers)
+        resp = await self._client.request(
+            method,
+            upstream_url,
+            content=fwd_body,
+            headers=headers,
+            timeout=request_timeout(model),
+        )
         if resp.status_code in RETRYABLE_STATUS:
             observe_proxy_request(
                 model=model.name,
@@ -346,6 +415,17 @@ class ProxyHandler:
                 duration_seconds=duration_s,
                 error=resp.status_code >= 400,
             )
+            if not 200 <= resp.status_code < 300:
+                self._log_error(
+                    key_info,
+                    model,
+                    status_code=resp.status_code,
+                    error=_error_message(content),
+                    started=started,
+                    request_id=request_id,
+                    requested_model_name=requested_model_name,
+                    upstream_path=upstream_path,
+                )
 
         return Response(
             content=content,
@@ -476,17 +556,24 @@ class ProxyHandler:
         request_id: str,
         started: float,
         extra_headers: dict[str, str] | None = None,
+        upstream_path: str = "chat/completions",
     ) -> StreamingResponse:
         usage = UsageInfo()
         ttft_ms: int | None = None
-        status_code = 200
+        status_code = 0
         first_chunk = True
+        error_body = bytearray()
+        stream_error = ""
 
         async def event_generator():
             nonlocal usage, ttft_ms, status_code, first_chunk
-            async with self._client.stream(method, url, content=body, headers=headers) as resp:
+            async with self._client.stream(
+                method, url, content=body, headers=headers, timeout=request_timeout(model)
+            ) as resp:
                 status_code = resp.status_code
                 async for line in resp.aiter_lines():
+                    if not 200 <= status_code < 300 and len(error_body) < _ERROR_MESSAGE_MAX:
+                        error_body.extend((line + "\n").encode())
                     chunk = (line + "\n").encode()
                     if first_chunk and line.startswith("data: "):
                         ttft_ms = int((time.perf_counter() - started) * 1000)
@@ -500,24 +587,41 @@ class ProxyHandler:
                     yield chunk
 
         async def wrapped_generator():
-            async for chunk in event_generator():
-                yield chunk
-            if (
-                self.usage_logger is not None
-                and key_info is not None
-                and 200 <= status_code < 300
-            ):
-                duration_ms = int((time.perf_counter() - started) * 1000)
-                self._log_usage(
-                    key_info,
-                    model,
-                    usage,
-                    duration_ms=duration_ms,
-                    ttft_ms=ttft_ms if ttft_ms is not None else duration_ms,
-                    status_code=status_code,
-                    request_id=request_id,
-                    requested_model_name=requested_model_name,
-                )
+            nonlocal stream_error
+            try:
+                async for chunk in event_generator():
+                    yield chunk
+            except httpx.RequestError as exc:
+                stream_error = f"upstream stream error: {exc}"
+                self.log.warning("upstream stream error model=%s: %s", model.name, exc)
+                raise
+            finally:
+                # Runs on normal completion, upstream failure, and client disconnect
+                # (GeneratorExit / cancellation), so partial usage is not lost.
+                if self.usage_logger is not None and key_info is not None:
+                    if 200 <= status_code < 300:
+                        duration_ms = int((time.perf_counter() - started) * 1000)
+                        self._log_usage(
+                            key_info,
+                            model,
+                            usage,
+                            duration_ms=duration_ms,
+                            ttft_ms=ttft_ms if ttft_ms is not None else duration_ms,
+                            status_code=status_code,
+                            request_id=request_id,
+                            requested_model_name=requested_model_name,
+                        )
+                    else:
+                        self._log_error(
+                            key_info,
+                            model,
+                            status_code=status_code or 502,
+                            error=stream_error or _error_message(bytes(error_body)),
+                            started=started,
+                            request_id=request_id,
+                            requested_model_name=requested_model_name,
+                            upstream_path=upstream_path,
+                        )
 
         return StreamingResponse(
             wrapped_generator(),
@@ -537,6 +641,7 @@ class ProxyHandler:
         request_id: str,
         requested_model_name: str,
         cache_hit: bool = False,
+        error: str = "",
     ) -> None:
         if self.usage_logger is None:
             return
@@ -572,6 +677,7 @@ class ProxyHandler:
                 status_code=status_code,
                 request_id=request_id,
                 cache_hit=cache_hit,
+                error=error,
             )
         )
         limiter = self.rate_limiter
@@ -583,6 +689,43 @@ class ProxyHandler:
                 loop.create_task(limiter.check_token_usage(key_info, usage.total_tokens))
             except RuntimeError:
                 pass
+
+    def _log_error(
+        self,
+        key_info: KeyInfo | None,
+        model: Model,
+        *,
+        status_code: int,
+        error: str,
+        started: float,
+        request_id: str,
+        requested_model_name: str,
+        upstream_path: str,
+    ) -> None:
+        """Record a failed (non-2xx) proxied request in request_logs."""
+        if self.usage_logger is None or key_info is None:
+            return
+        if upstream_path not in {"chat/completions", "completions", "embeddings"}:
+            return
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        self.log.warning(
+            "proxy request failed model=%s status=%s request_id=%s: %s",
+            model.name,
+            status_code,
+            request_id,
+            error,
+        )
+        self._log_usage(
+            key_info,
+            model,
+            UsageInfo(),
+            duration_ms=duration_ms,
+            ttft_ms=duration_ms,
+            status_code=status_code,
+            request_id=request_id,
+            requested_model_name=requested_model_name,
+            error=error[:_ERROR_MESSAGE_MAX] or f"upstream status {status_code}",
+        )
 
     @staticmethod
     def _filter_response_headers(headers: httpx.Headers) -> dict[str, str]:
