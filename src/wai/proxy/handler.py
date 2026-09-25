@@ -678,6 +678,7 @@ class ProxyHandler:
             classifier_model=classifier,
             client=self._client,
             build_headers=build_headers,
+            scope=key_info.id if key_info is not None else "",
         )
         model = self._resolve_model(key_info, decision.model_name)
         return model, decision
@@ -857,10 +858,12 @@ class ProxyHandler:
             finalize()
 
         if 200 <= status_code < 300:
+            # Tell reverse proxies (IIS ARR, nginx) not to buffer or cache the token stream.
+            sse_headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **(extra_headers or {})}
             return StreamingResponse(
                 wrapped_generator(),
                 media_type="text/event-stream",
-                headers=extra_headers or None,
+                headers=sse_headers,
                 background=BackgroundTask(after_response),
             )
         return StreamingResponse(

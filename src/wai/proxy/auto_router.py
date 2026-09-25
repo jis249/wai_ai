@@ -30,6 +30,7 @@ HEADER_REQUESTED_MODEL = "X-WAI-Requested-Model"
 REASON_HEURISTIC = "heuristic"
 REASON_CLASSIFIER = "classifier"
 REASON_DEFAULT = "default"
+REASON_SESSION = "session"
 
 COMPLEX_MODE_RANDOM = "random"
 COMPLEX_MODE_FIXED = "fixed"
@@ -39,14 +40,20 @@ _CODE_FENCE_RE = re.compile(r"```")
 _CODE_HINT_RE = re.compile(
     r"\b(def |class |import |function |const |let |var |#include|SELECT |FROM |"
     r"async |await |fn |pub |package |docker|kubernetes|regex|stack.?trace|"
-    r"compile|typescript|python|golang|rust|sql)\b",
+    r"compile|typescript|python|golang|rust|sql|javascript|java|dotnet|node\.?js|react|"
+    r"html|css|json|yaml|bug|debug|exception|traceback|refactor|unit tests?|endpoint|api|"
+    r"function|method|variable|lint|npm|pip|git|dockerfile|repo|codebase)\b"
+    # File names are a strong coding signal too (e.g. "update auth.py", "fix LoginPage.tsx").
+    r"|\b\w+\.(?:py|ts|tsx|js|jsx|java|cs|go|rs|cpp|rb|php|sql|ya?ml|json|sh|ps1)\b",
     re.IGNORECASE,
 )
 _COMPLEX_RE = re.compile(
     r"\b(architect(?:ure)?|design a system|system design|trade.?offs?|reason step.?by.?step|"
     r"prove that|derive the|multi.?step (?:plan|design|migration)|refactor the entire|"
     r"migrate (?:the |this )?(?:system|service|database|app)|production.?ready|"
-    r"security audit|root cause analysis)\b",
+    r"security audit|root cause analysis|race condition|deadlock|memory leak|concurrency bug|"
+    r"performance bottleneck|threat model|distributed (?:system|lock|transaction)s?|"
+    r"(?:across|in) the (?:whole|entire) (?:codebase|repo(?:sitory)?|project)|end.to.end design)\b",
     re.IGNORECASE,
 )
 _SIMPLE_RE = re.compile(
@@ -123,6 +130,8 @@ class PromptSignals:
     last_user_text: str = ""
     estimated_tokens: int = 0
     last_user_tokens: int = 0
+    # Whole request incl. tool/function schemas: what the routed model must fit.
+    context_tokens: int = 0
     has_images: bool = False
     is_code_heavy: bool = False
     is_complex: bool = False
@@ -282,6 +291,13 @@ def extract_prompt_signals(envelope: dict[str, Any]) -> PromptSignals:
     last_user_text = last_user_text.strip()
 
     est = max(1, len(text) // 4) if text else 0
+    schema_chars = 0
+    for field_name in ("tools", "functions"):
+        if envelope.get(field_name):
+            try:
+                schema_chars += len(json.dumps(envelope[field_name]))
+            except (TypeError, ValueError):
+                pass
     last_est = max(1, len(last_user_text) // 4) if last_user_text else 0
 
     signal_text = last_user_text or text
@@ -311,12 +327,14 @@ def extract_prompt_signals(envelope: dict[str, Any]) -> PromptSignals:
         confidence = 0.95
     elif is_complex:
         confidence = 0.85
-    elif is_code and signal_est > 80:
+    elif is_code:
+        # Coding is the main use of auto: never pay a classifier round-trip for it.
         confidence = 0.8
     elif is_simple:
         confidence = 0.75
-    elif is_code:
-        confidence = 0.65
+    elif signal_est < 250:
+        # Short/medium prose: the classifier almost always answers "default" anyway.
+        confidence = 0.72
     elif signal_est > 800:
         confidence = 0.55
 
@@ -325,6 +343,7 @@ def extract_prompt_signals(envelope: dict[str, Any]) -> PromptSignals:
         last_user_text=last_user_text,
         estimated_tokens=est,
         last_user_tokens=last_est,
+        context_tokens=est + schema_chars // 4,
         has_images=has_images,
         is_code_heavy=is_code,
         is_complex=is_complex,
@@ -436,6 +455,26 @@ def heuristic_route(
     return RoutingDecision(pick.name, REASON_HEURISTIC, "default model")
 
 
+def _requested_output_tokens(envelope: dict[str, Any]) -> int:
+    for key in ("max_completion_tokens", "max_tokens", "max_output_tokens"):
+        value = envelope.get(key)
+        if isinstance(value, int) and value > 0:
+            return value
+    return 0
+
+
+def _fitting_candidates(candidates: list[Candidate], needed_tokens: int) -> list[Candidate]:
+    """Drop models whose context window cannot hold the request (unknown size = assume it fits).
+
+    Avoids a guaranteed context-length error + fallback round-trip for long agent sessions.
+    Returns the original list when nothing would fit, so the upstream error still surfaces.
+    """
+    if needed_tokens <= 0:
+        return candidates
+    fits = [c for c in candidates if not c.max_context_tokens or c.max_context_tokens >= needed_tokens]
+    return fits or candidates
+
+
 def fallback_pick(
     candidates: list[Candidate],
     default_model: str,
@@ -459,6 +498,8 @@ class AutoRouter:
         self.log = log or logging.getLogger("wai.auto_router")
         self._decision_cache: dict[str, tuple[float, RoutingDecision]] = {}
         self._cache_ttl = 60.0
+        self._session_cache: dict[str, tuple[float, RoutingDecision]] = {}
+        self._session_ttl = 30 * 60.0
 
     async def route(
         self,
@@ -468,11 +509,48 @@ class AutoRouter:
         classifier_model: Model | None,
         client: httpx.AsyncClient,
         build_headers: Any,
+        scope: str = "",
     ) -> RoutingDecision:
         if not candidates:
             raise ValueError("no accessible models available for auto routing")
 
         signals = extract_prompt_signals(envelope)
+        # Agent/editor sessions resend the whole conversation every turn. Keep one model per
+        # conversation (stable behaviour, warm provider prompt caches) and only ever upgrade.
+        # Keyed on the unfiltered pool so the key survives the conversation outgrowing a model.
+        session_key = "" if signals.has_images else self._session_key(envelope, candidates, scope)
+        candidates = _fitting_candidates(candidates, signals.context_tokens + _requested_output_tokens(envelope))
+        sticky = self._session_get(session_key, candidates)
+        if sticky is not None:
+            if signals.is_complex and not sticky.detail.startswith("complex"):
+                upgraded = heuristic_route(
+                    signals,
+                    candidates,
+                    default_model=self.config.default_model,
+                    complex_mode=self.config.complex_mode,
+                    complex_model=self.config.complex_model,
+                )
+                if upgraded is not None and upgraded.model_name != sticky.model_name:
+                    self._session_put(session_key, upgraded)
+                    return upgraded
+            return RoutingDecision(sticky.model_name, REASON_SESSION, f"sticky: {sticky.detail}"[:200])
+
+        decision = await self._route_fresh(
+            envelope, signals, candidates, classifier_model=classifier_model, client=client, build_headers=build_headers
+        )
+        self._session_put(session_key, decision)
+        return decision
+
+    async def _route_fresh(
+        self,
+        envelope: dict[str, Any],
+        signals: PromptSignals,
+        candidates: list[Candidate],
+        *,
+        classifier_model: Model | None,
+        client: httpx.AsyncClient,
+        build_headers: Any,
+    ) -> RoutingDecision:
         cache_key = ""
         if not signals.has_images:
             names = ",".join(sorted(c.name for c in candidates))
@@ -526,6 +604,56 @@ class AutoRouter:
         self._remember(cache_key, picked)
         return picked
 
+    @staticmethod
+    def _session_key(envelope: dict[str, Any], candidates: list[Candidate], scope: str = "") -> str:
+        """Conversation identity: system prompt + first user message (stable across turns)."""
+        messages = envelope.get("messages")
+        if not isinstance(messages, list):
+            return ""
+        system_parts: list[str] = []
+        first_user = ""
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role")
+            if role in ("system", "developer"):
+                system_parts.append(_content_to_text(msg.get("content"))[0][:2000])
+            elif role == "user":
+                if not first_user:
+                    first_user = _content_to_text(msg.get("content"))[0][:2000]
+        if not first_user:
+            return ""
+        names = ",".join(sorted(c.name for c in candidates))
+        raw = "\x1f".join([scope, "\n".join(system_parts)[:4000], first_user, names])
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    def _session_get(self, key: str, candidates: list[Candidate]) -> RoutingDecision | None:
+        if not key:
+            return None
+        hit = self._session_cache.get(key)
+        if hit is None:
+            return None
+        stamp, decision = hit
+        if time.monotonic() - stamp > self._session_ttl:
+            self._session_cache.pop(key, None)
+            return None
+        if _pick_by_name(candidates, decision.model_name) is None:
+            return None
+        # Sliding expiry: an active session keeps its model.
+        self._session_cache[key] = (time.monotonic(), decision)
+        return decision
+
+    def _session_put(self, key: str, decision: RoutingDecision) -> None:
+        if not key:
+            return
+        if decision.reason == REASON_SESSION:
+            return
+        self._session_cache[key] = (time.monotonic(), decision)
+        if len(self._session_cache) > 4096:
+            oldest = sorted(self._session_cache.items(), key=lambda item: item[1][0])[:512]
+            for k, _ in oldest:
+                self._session_cache.pop(k, None)
+
     def _remember(self, cache_key: str, decision: RoutingDecision) -> None:
         if not cache_key:
             return
@@ -567,7 +695,8 @@ class AutoRouter:
         body_doc = {
             "model": classifier_model.name,
             "temperature": 0,
-            "max_tokens": 64,
+            # A model name is a handful of tokens; a small cap keeps the classifier fast.
+            "max_tokens": 24,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},

@@ -119,3 +119,98 @@ def test_compare_approaches_in_casual_question_is_not_complex():
 def test_fallback_uses_default():
     decision = fallback_pick(_pool(), DEFAULT, "fallback")
     assert decision.model_name == DEFAULT
+
+
+# --- coding-first routing, context fit, session stickiness --------------------------------
+
+import asyncio  # noqa: E402
+
+from wai.proxy.auto_router import (  # noqa: E402
+    REASON_SESSION,
+    AutoRouter,
+    AutoRouterConfig,
+)
+
+COMPLEX = "gpt-4o-azure"
+
+
+def _router() -> AutoRouter:
+    return AutoRouter(
+        AutoRouterConfig(default_model=DEFAULT, complex_mode=COMPLEX_MODE_FIXED, complex_model=COMPLEX)
+    )
+
+
+class _NoClassifier:
+    """Any classifier HTTP call fails the test: coding prompts must not pay that round-trip."""
+
+    async def post(self, *a, **k):
+        raise AssertionError("classifier should not be called")
+
+
+def _route(router, messages, *, scope="k1", classifier=object(), pool=None, **extra):
+    return asyncio.run(
+        router.route(
+            {"messages": messages, **extra},
+            pool or _pool(),
+            classifier_model=classifier,
+            client=_NoClassifier(),
+            build_headers=lambda *a: {},
+            scope=scope,
+        )
+    )
+
+
+def test_short_coding_prompt_without_code_fence_skips_classifier():
+    for text in ("fix the login bug in auth.py", "why does this endpoint return 500", "add unit tests for the api"):
+        signals = extract_prompt_signals({"messages": [{"role": "user", "content": text}]})
+        assert signals.is_code_heavy, text
+        assert signals.confidence >= 0.7, text
+    d = _route(_router(), [{"role": "user", "content": "fix the login bug in auth.py"}])
+    assert d.model_name == DEFAULT
+
+
+def test_medium_prose_skips_classifier():
+    text = "Summarise the main points of our discussion about onboarding new hires. " * 6
+    d = _route(_router(), [{"role": "user", "content": text}])
+    assert d.model_name == DEFAULT
+
+
+def test_context_fit_skips_models_too_small():
+    pool = [
+        annotate_candidate(DEFAULT, provider="ollama", max_context_tokens=8_000),
+        annotate_candidate(COMPLEX, provider="azure", max_context_tokens=400_000),
+    ]
+    big = [{"role": "user", "content": "x" * 60_000}, {"role": "user", "content": "fix the bug in main.py"}]
+    d = _route(_router(), big, pool=pool)
+    assert d.model_name == COMPLEX
+
+
+def test_session_sticks_after_complex_turn():
+    r = _router()
+    first = [{"role": "system", "content": "You are a coding agent."},
+             {"role": "user", "content": "Design a production-ready architecture for our billing service."}]
+    assert _route(r, first).model_name == COMPLEX
+    later = first + [{"role": "assistant", "content": "..."}, {"role": "user", "content": "ok now add tests"}]
+    d = _route(r, later)
+    assert d.model_name == COMPLEX
+    assert d.reason == REASON_SESSION
+
+
+def test_session_upgrades_but_never_downgrades():
+    r = _router()
+    first = [{"role": "user", "content": "fix the bug in utils.py"}]
+    assert _route(r, first).model_name == DEFAULT
+    turn2 = first + [{"role": "assistant", "content": "..."},
+                     {"role": "user", "content": "Now do a root cause analysis of the deadlock."}]
+    assert _route(r, turn2).model_name == COMPLEX
+    turn3 = turn2 + [{"role": "assistant", "content": "..."}, {"role": "user", "content": "thanks"}]
+    assert _route(r, turn3).model_name == COMPLEX
+
+
+def test_sessions_are_scoped_per_key():
+    r = _router()
+    first = [{"role": "user", "content": "Design a production-ready architecture for billing."}]
+    assert _route(r, first, scope="a").model_name == COMPLEX
+    follow = first + [{"role": "assistant", "content": "..."}, {"role": "user", "content": "hi"}]
+    assert _route(r, follow, scope="a").reason == REASON_SESSION
+    assert _route(r, follow, scope="b").reason != REASON_SESSION

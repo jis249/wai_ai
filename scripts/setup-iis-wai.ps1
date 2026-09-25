@@ -136,7 +136,9 @@ if (Test-Path "IIS:\Sites\$SiteName") {
 }
 
 $appcmd = Join-Path $env:windir "System32\inetsrv\appcmd.exe"
-& $appcmd set config -section:system.webServer/proxy /enabled:"True" /preserveHostHeader:"True" /reverseRewriteHostInResponseHeaders:"False" /commit:apphost
+# responseBufferLimit 0 = forward each chunk immediately, so LLM token streams (SSE) are not held back;
+# timeout covers long agent streams (ARR default is 2 minutes).
+& $appcmd set config -section:system.webServer/proxy /enabled:"True" /preserveHostHeader:"True" /reverseRewriteHostInResponseHeaders:"False" /responseBufferLimit:"0" /timeout:"00:10:00" /commit:apphost
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to enable IIS ARR proxy."
 }

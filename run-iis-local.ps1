@@ -45,6 +45,18 @@ function Start-WaiBackend {
         $runLocalArgs.PostgresPassword = $PostgresPassword
     }
 
+    # A dependency upgrade is staged in .venv.next (built and tested while the old backend ran,
+    # since Windows locks loaded .pyd files). Swap it in now that the backend is stopped.
+    $venvDir = Join-Path $Root ".venv"
+    $nextVenv = Join-Path $Root ".venv.next"
+    $prevVenv = Join-Path $Root ".venv.prev"
+    if (Test-Path (Join-Path $nextVenv "Scripts\python.exe")) {
+        Write-Host "Activating upgraded Python environment (.venv.next -> .venv, old kept as .venv.prev)..."
+        if (Test-Path $prevVenv) { Remove-Item -Recurse -Force $prevVenv }
+        if (Test-Path $venvDir) { Rename-Item $venvDir ".venv.prev" }
+        Rename-Item $nextVenv ".venv"
+    }
+
     Write-Host "Starting WAI backend on $BackendUrl..."
     & $RunLocalScript @runLocalArgs
     if ($LASTEXITCODE -ne 0) {
