@@ -14,6 +14,7 @@ import {
   Terminal,
   UserPlus,
   Users,
+  Workflow,
   ScrollText,
   Settings,
   User,
@@ -61,16 +62,27 @@ export function hasMinRole(userRole: string, minRole?: string): boolean {
   return (roleLevel[userRole] ?? 0) >= (roleLevel[minRole] ?? 0)
 }
 
+const CONNECT_EDITOR_ITEM: NavItem = {
+  label: 'Connect editor',
+  path: '/integrations',
+  icon: Workflow,
+  keywords: ['cursor', 'vs code', 'vscode', 'copilot', 'continue', 'cline', 'claude code', 'integration', 'setup'],
+}
+
 export function buildNavigation(userRole: string): NavGroup[] {
   const isMember = userRole === 'member'
   return [
     {
       label: 'Overview',
       items: isMember
-        ? [{ label: 'Home', path: '/playground', icon: Terminal, keywords: ['playground', 'chat'] }]
+        ? [
+            { label: 'Home', path: '/playground', icon: Terminal, keywords: ['playground', 'chat'] },
+            CONNECT_EDITOR_ITEM,
+          ]
         : [
             { label: 'Dashboard', path: '/', icon: LayoutDashboard, keywords: ['home', 'overview'] },
             { label: 'Playground', path: '/playground', icon: Terminal, keywords: ['chat', 'try'] },
+            CONNECT_EDITOR_ITEM,
           ],
     },
     {

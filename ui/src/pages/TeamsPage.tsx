@@ -10,6 +10,7 @@ import { CreateTeamDialog } from '../components/members/CreateTeamDialog'
 import { TeamsTable } from '../components/members/TeamsTable'
 import { useCursorPager } from '../components/members/listState'
 import { useMe } from '../hooks/useMe'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { usePermissions } from '../hooks/usePermissions'
 import { useTeams, useDeleteTeam, type TeamResponse } from '../hooks/useTeams'
 import { useToast } from '../hooks/useToast'
@@ -18,7 +19,7 @@ import { errorMessage } from '../lib/errors'
 export default function TeamsPage() {
   const { data: me } = useMe()
   const perms = usePermissions()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
   const isOrgAdmin = perms.isOrgAdmin
   const pager = useCursorPager()
 

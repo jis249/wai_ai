@@ -1,131 +1,23 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Table, type Column } from '../components/ui/Table'
-import { Dialog, ConfirmDialog } from '../components/ui/Dialog'
+import { ConfirmDialog } from '../components/ui/Dialog'
 import { Badge } from '../components/ui/Badge'
-import { Button } from '../components/ui/Button'
-import { Input } from '../components/ui/Input'
-import { Toggle } from '../components/ui/Toggle'
 import { TimeAgo } from '../components/ui/TimeAgo'
 import { StatCard } from '../components/ui/StatCard'
 import { IconButton } from '../components/ui/IconButton'
 import { EmptyState } from '../components/ui/EmptyState'
 import { ErrorState } from '../components/ui/ErrorState'
-import { Cloud, Plus, Search, ShieldCheck, Trash2, Users } from '../components/ui/icons'
-import { PasswordInput } from '../components/settings/PasswordInput'
+import { Cloud, Search, ShieldCheck, Trash2, Users } from '../components/ui/icons'
 import { UserCell } from '../components/members/UserCell'
 import { ListToolbar, SearchField } from '../components/members/SearchField'
 import { matchesQuery, useClientSort, useCursorPager } from '../components/members/listState'
 import { useMe } from '../hooks/useMe'
 import { usePermissions } from '../hooks/usePermissions'
-import { useUsers, useCreateUser, useDeleteUser, type UserResponse, type CreateUserParams } from '../hooks/useUsers'
+import { useUsers, useDeleteUser, type UserResponse } from '../hooks/useUsers'
 import { useToast } from '../hooks/useToast'
 import { errorMessage } from '../lib/errors'
-
-// ---------------------------------------------------------------------------
-// CreateUserDialog
-// ---------------------------------------------------------------------------
-
-interface CreateUserErrors {
-  email?: string
-  displayName?: string
-  password?: string
-}
-
-function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [email, setEmail] = useState('')
-  const [displayName, setDisplayName] = useState('')
-  const [password, setPassword] = useState('')
-  const [isSystemAdmin, setIsSystemAdmin] = useState(false)
-  const [errors, setErrors] = useState<CreateUserErrors>({})
-
-  const createUser = useCreateUser()
-  const { toast } = useToast()
-
-  function handleClose() {
-    setEmail('')
-    setDisplayName('')
-    setPassword('')
-    setIsSystemAdmin(false)
-    setErrors({})
-    onClose()
-  }
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    const errs: CreateUserErrors = {}
-    const trimmedEmail = email.trim()
-    if (!trimmedEmail) errs.email = 'Email is required'
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) errs.email = 'Enter a valid email address'
-    const trimmedName = displayName.trim()
-    if (!trimmedName) errs.displayName = 'Display name is required'
-    if (!password) errs.password = 'Password is required'
-    else if (password.length < 8) errs.password = 'Password must be at least 8 characters'
-    setErrors(errs)
-    if (errs.email || errs.displayName || errs.password) return
-
-    const params: CreateUserParams = {
-      email: trimmedEmail,
-      display_name: trimmedName,
-      password,
-      is_system_admin: isSystemAdmin,
-    }
-    createUser.mutate(params, {
-      onSuccess: () => {
-        toast({ variant: 'success', message: 'User created' })
-        handleClose()
-      },
-      onError: (err) => toast({ variant: 'error', message: errorMessage(err, 'Failed to create user') }),
-    })
-  }
-
-  return (
-    <Dialog open={open} onClose={handleClose} title="Create user">
-      <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Input
-            label="Email"
-            type="email"
-            autoComplete="off"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="user@example.com"
-            error={errors.email}
-            disabled={createUser.isPending}
-          />
-          <Input
-            label="Display name"
-            autoComplete="off"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            placeholder="Jane Smith"
-            error={errors.displayName}
-            disabled={createUser.isPending}
-          />
-        </div>
-        <PasswordInput
-          label="Password"
-          autoComplete="new-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Min. 8 characters"
-          error={errors.password}
-          disabled={createUser.isPending}
-        />
-        <Toggle checked={isSystemAdmin} onChange={setIsSystemAdmin} disabled={createUser.isPending} label="System admin" />
-        <div className="flex flex-wrap justify-end gap-2 pt-2">
-          <Button variant="secondary" onClick={handleClose} disabled={createUser.isPending}>
-            Cancel
-          </Button>
-          <Button type="submit" loading={createUser.isPending}>
-            Create user
-          </Button>
-        </div>
-      </form>
-    </Dialog>
-  )
-}
 
 // ---------------------------------------------------------------------------
 // SystemUsersPage
@@ -136,7 +28,6 @@ export default function SystemUsersPage() {
   const perms = usePermissions()
   const pager = useCursorPager()
   const [query, setQuery] = useState('')
-  const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<UserResponse | null>(null)
 
   const usersQuery = useUsers(pager.cursor)
@@ -231,12 +122,7 @@ export default function SystemUsersPage() {
     <>
       <PageHeader
         title="Users"
-        description="All system users"
-        actions={
-          <Button icon={<Plus className="h-4 w-4" />} onClick={() => setShowCreateDialog(true)}>
-            Create user
-          </Button>
-        }
+        description="All system users. New users are created when they first sign in with Microsoft."
       />
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -278,8 +164,7 @@ export default function SystemUsersPage() {
                 <EmptyState
                   icon={<Users className="h-6 w-6" />}
                   title="No users yet"
-                  description="Create a user or invite people from an organization."
-                  action={{ label: 'Create user', onClick: () => setShowCreateDialog(true) }}
+                  description="Users appear here after they sign in with Microsoft."
                 />
               )
             }
@@ -287,7 +172,6 @@ export default function SystemUsersPage() {
         </div>
       )}
 
-      <CreateUserDialog open={showCreateDialog} onClose={() => setShowCreateDialog(false)} />
 
       <ConfirmDialog
         open={deleteTarget !== null}

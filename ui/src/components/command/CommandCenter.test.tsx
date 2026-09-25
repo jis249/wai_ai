@@ -118,9 +118,11 @@ describe('command palette', () => {
     renderApp()
     await user.keyboard('{Control>}k{/Control}')
     dialog = await screen.findByRole('dialog', { name: 'Command palette' })
-    for (const name of [/Organizations/, /Platform setup/, /Add model/, /Invite member/]) {
+    for (const name of [/Organizations/, /Platform setup/, /Add model/]) {
       expect(within(dialog).getByRole('option', { name })).toBeInTheDocument()
     }
+    // Users join via SSO only; there is no invite command for anyone.
+    expect(within(dialog).queryByRole('option', { name: /Invite member/ })).not.toBeInTheDocument()
   })
 
   it('runs deep-link actions', async () => {

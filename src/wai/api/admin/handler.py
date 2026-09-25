@@ -30,24 +30,9 @@ from wai.api.admin.common import (
     unauthorized,
 )
 from wai.api.admin import repository as repo
+from wai.config.models import SSOConfig
 from wai.db.connection import Database
 from wai.proxy.access import ModelAccessCache, reload_access_cache
-
-
-@dataclass
-class SSOConfig:
-    enabled: bool = False
-    issuer: str = ""
-    client_id: str = ""
-    client_secret: str = ""
-    redirect_url: str = ""
-    scopes: list[str] = field(default_factory=list)
-    allowed_domains: list[str] = field(default_factory=list)
-    auto_provision: bool = False
-    default_role: str = "member"
-    default_org_slug: str = ""
-    group_sync: bool = False
-    group_claim: str = ""
 
 
 @dataclass

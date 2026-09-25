@@ -2,12 +2,12 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { SkeletonRows } from '../components/ui/Skeleton'
 import { Lock } from '../components/ui/icons'
 import { OrgMembersPanel } from '../components/members/OrgMembersPanel'
-import { useMe } from '../hooks/useMe'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { usePermissions } from '../hooks/usePermissions'
 
 /** /org/users: members of the signed-in user's organization. */
 export default function OrgUsersPage() {
-  const { data: me } = useMe()
+  const orgId = useActiveOrgId()
   const perms = usePermissions()
 
   if (!perms.isReady) return <SkeletonRows rows={5} columns={3} />
@@ -23,5 +23,5 @@ export default function OrgUsersPage() {
     )
   }
 
-  return <OrgMembersPanel orgId={me?.org_id ?? ''} />
+  return <OrgMembersPanel orgId={orgId} />
 }

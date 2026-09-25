@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import apiClient from '../api/client'
-import { useMe } from '../hooks/useMe'
 import { useModels } from '../hooks/useModels'
 import { useToast } from '../hooks/useToast'
 import { errorMessage } from '../lib/errors'
@@ -39,8 +39,7 @@ function useSetOrgModelAccess(orgId: string) {
 // ---------------------------------------------------------------------------
 
 export default function ModelsAccessTab() {
-  const { data: me } = useMe()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
 
   const modelsQuery = useModels()
   const accessQuery = useOrgModelAccess(orgId)

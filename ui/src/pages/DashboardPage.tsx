@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { PageHeader } from '../components/ui/PageHeader'
 import { StatCard } from '../components/ui/StatCard'
 import { Banner } from '../components/ui/Banner'
@@ -250,7 +251,7 @@ export default function DashboardPage() {
   }
 
   const canViewOrgUsage = me?.is_system_admin === true || me?.role === 'org_admin'
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
 
   // Time-series, top models and team usage all share the page-level range
   const { from, to, preset } = useTimeRange(timeRange)
@@ -429,8 +430,8 @@ export default function DashboardPage() {
         )}
 
         {/* Token budget section */}
-        {canViewOrgUsage && me?.org_id != null && !statsLoading && (
-          <BudgetSection orgId={me.org_id} tokens24h={stats?.tokens_24h ?? 0} />
+        {canViewOrgUsage && orgId !== '' && !statsLoading && (
+          <BudgetSection orgId={orgId} tokens24h={stats?.tokens_24h ?? 0} />
         )}
 
         {/* Requests over time */}

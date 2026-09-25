@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { useParams } from 'react-router-dom'
-import { useMe } from '../hooks/useMe'
 import { usePermissions } from '../hooks/usePermissions'
 import {
   useTeamMCPAccess,
@@ -19,9 +19,8 @@ import { ServerAccessChecklist } from './mcp/ServerAccessChecklist'
 export default function TeamMCPAccessTab({ teamId: teamIdProp }: { teamId?: string }) {
   const { teamId: paramTeamId = '' } = useParams<{ teamId: string }>()
   const teamId = teamIdProp || paramTeamId
-  const { data: me } = useMe()
   const { isTeamAdmin, isReady } = usePermissions()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
 
   const serversQuery = useAvailableGlobalMCPServers(orgId)
   const orgAccessQuery = useOrgMCPAccess(orgId)

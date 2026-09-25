@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { useParams } from 'react-router-dom'
-import { useMe } from '../hooks/useMe'
 import { useModels } from '../hooks/useModels'
 import { useTeamModelAccess, useSetTeamModelAccess } from '../hooks/useTeamModelAccess'
 import { useToast } from '../hooks/useToast'
@@ -10,8 +10,7 @@ import { ModelAllowlist } from './models/ModelAllowlist'
 export default function TeamModelsTab({ teamId: teamIdProp }: { teamId?: string }) {
   const { teamId: paramTeamId = '' } = useParams<{ teamId: string }>()
   const teamId = teamIdProp || paramTeamId
-  const { data: me } = useMe()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
 
   const modelsQuery = useModels()
   const accessQuery = useTeamModelAccess(orgId, teamId)

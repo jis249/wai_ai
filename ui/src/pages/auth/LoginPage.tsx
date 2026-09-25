@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { FormEvent } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
@@ -9,12 +9,43 @@ import { ThemeToggle } from '../../components/ui/ThemeToggle'
 import { LogIn, ShieldCheck } from '../../components/ui/icons'
 import { PasswordInput } from '../../components/settings/PasswordInput'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle'
+import { useTheme } from '../../hooks/useTheme'
 import { LOCAL_STORAGE_KEY } from '../../lib/constants'
 import type { MeResponse } from '../../hooks/useMe'
 
 interface AuthProviders {
   local: boolean
   oidc: boolean
+  /** 'microsoft' when SSO is Microsoft Entra ID; '' for a generic OIDC provider. */
+  oidc_brand?: string
+}
+
+function MicrosoftLogo() {
+  return (
+    <svg width="21" height="21" viewBox="0 0 21 21" aria-hidden="true" className="shrink-0">
+      <rect x="1" y="1" width="9" height="9" fill="#F25022" />
+      <rect x="11" y="1" width="9" height="9" fill="#7FBA00" />
+      <rect x="1" y="11" width="9" height="9" fill="#00A4EF" />
+      <rect x="11" y="11" width="9" height="9" fill="#FFB900" />
+    </svg>
+  )
+}
+
+/** Sign-in button following Microsoft's identity branding (light / dark variants). */
+function MicrosoftSignInButton({ dark }: { dark: boolean }) {
+  return (
+    <a
+      href="/api/v1/auth/oidc/login"
+      className={
+        'flex h-[41px] w-full items-center justify-center gap-3 border px-3 text-[15px] font-semibold no-underline transition-[filter] hover:brightness-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
+        (dark ? 'border-[#2F2F2F] bg-[#2F2F2F] text-white hover:brightness-125' : 'border-[#8C8C8C] bg-white text-[#5E5E5E]')
+      }
+      style={{ fontFamily: '"Segoe UI", system-ui, sans-serif' }}
+    >
+      <MicrosoftLogo />
+      Sign in with Microsoft
+    </a>
+  )
 }
 
 const SSO_ERROR_MESSAGES: Record<string, string> = {
@@ -23,6 +54,7 @@ const SSO_ERROR_MESSAGES: Record<string, string> = {
   sso_error: 'SSO authentication failed. Please try again.',
   email_not_verified: 'Your SSO email address is not verified. Verify it with your identity provider and try again.',
   provision_no_default_org: 'SSO sign-up is not configured yet. Please contact your administrator.',
+  account_exists: 'An account with this email already exists. Sign in with your password or ask an administrator to link it.',
 }
 
 const SSO_ERROR_FALLBACK = 'Single sign-on did not complete. Please try again or contact your administrator.'
@@ -32,6 +64,7 @@ export default function LoginPage() {
   const queryClient = useQueryClient()
   const [searchParams] = useSearchParams()
   useDocumentTitle('Sign in')
+  const { theme } = useTheme()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -142,23 +175,20 @@ export default function LoginPage() {
                   <span className="text-xs text-text-tertiary">or</span>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-              <a
-                href="/api/v1/auth/oidc/login"
-                className="flex w-full items-center justify-center gap-2 rounded-md border border-border px-6 py-3 text-base font-medium text-text-secondary no-underline transition-colors hover:bg-bg-tertiary hover:text-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              >
-                <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-                Sign in with SSO
-              </a>
+              {providers.oidc_brand === 'microsoft' ? (
+                <MicrosoftSignInButton dark={theme === 'dark'} />
+              ) : (
+                <a
+                  href="/api/v1/auth/oidc/login"
+                  className="flex w-full items-center justify-center gap-2 rounded-md border border-border px-6 py-3 text-base font-medium text-text-secondary no-underline transition-colors hover:bg-bg-tertiary hover:text-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                  Sign in with SSO
+                </a>
+              )}
             </>
           )}
         </div>
-
-        <p className="mt-6 text-center text-xs text-text-tertiary">
-          First-time install?{' '}
-          <Link to="/setup" className="text-accent no-underline hover:underline">
-            Open setup checklist
-          </Link>
-        </p>
       </div>
     </main>
   )

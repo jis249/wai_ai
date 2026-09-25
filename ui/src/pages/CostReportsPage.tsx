@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { PageHeader } from '../components/ui/PageHeader'
 import { StatCard } from '../components/ui/StatCard'
 import { Table } from '../components/ui/Table'
@@ -209,7 +210,7 @@ export default function CostReportsPage({ hideHeader = false }: { hideHeader?: b
   const [currency, setCurrency] = useState<CostCurrency>(readStoredCurrency)
   const [compare, setCompare] = useState(false)
   const { data: me } = useMe()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
   const canViewOrgUsage = me?.is_system_admin === true || me?.role === 'org_admin'
 
   const { from, to, hours, preset } = useTimeRange(range)

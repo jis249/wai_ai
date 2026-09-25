@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { useParams } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
 import { StatCard } from '../components/ui/StatCard'
@@ -35,7 +36,7 @@ export default function TeamMembersTab() {
   const { teamId = '' } = useParams<{ teamId: string }>()
   const { data: me } = useMe()
   const perms = usePermissions()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
   const canManage = perms.canManageTeams
   const { toast } = useToast()
   const pager = useCursorPager()

@@ -16,6 +16,7 @@ import { RouteBoundary } from './components/RouteBoundary'
 const AcceptInvitePage = lazyPage(() => import('./pages/AcceptInvitePage'))
 const DashboardPage = lazyPage(() => import('./pages/DashboardPage'))
 const KeysPage = lazyPage(() => import('./pages/KeysPage'))
+const IntegrationsPage = lazyPage(() => import('./pages/IntegrationsPage'))
 const TeamsPage = lazyPage(() => import('./pages/TeamsPage'))
 const TeamDetailPage = lazyPage(() => import('./pages/TeamDetailPage'))
 const TeamMembersTab = lazyPage(() => import('./pages/TeamMembersTab'))
@@ -107,6 +108,7 @@ export default function App() {
                   <Route element={<RouteBoundary />}>
                     <Route index element={<HomeRoute />} />
                     <Route path="playground" element={<PlaygroundPage />} />
+                    <Route path="integrations" element={<IntegrationsPage />} />
                     <Route element={<ApiAccessLayout />}>
                       <Route path="keys" element={<KeysPage hideHeader />} />
                       <Route path="service-accounts" element={<ServiceAccountsPage hideHeader />} />

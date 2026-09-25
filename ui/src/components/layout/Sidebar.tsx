@@ -11,6 +11,7 @@ import { useCommandCenter } from '../command/context'
 import { useLogout } from '../command/useLogout'
 import { Kbd } from '../command/Kbd'
 import { isItemActive, visibleNavigation } from './navigation'
+import { OrgSwitcher } from './OrgSwitcher'
 import {
   Lock,
   LogOut,
@@ -127,6 +128,12 @@ export function Sidebar({
               <Kbd keys="mod+k" />
             </button>
           )}
+        </div>
+      )}
+
+      {!collapsed && data?.is_system_admin && (
+        <div className="shrink-0 px-3 pt-3">
+          <OrgSwitcher />
         </div>
       )}
 

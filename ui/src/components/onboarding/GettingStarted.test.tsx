@@ -46,7 +46,7 @@ describe('GettingStarted', () => {
     expect(screen.getByRole('link', { name: /Create key/ })).toHaveAttribute('href', '/keys?new=1')
     expect(screen.getByRole('link', { name: /Open playground/ })).toHaveAttribute('href', '/playground')
     expect(screen.getByRole('link', { name: /Set budget/ })).toHaveAttribute('href', '/org/settings')
-    expect(screen.getByRole('link', { name: /Invite/ })).toHaveAttribute('href', '/org?invite=1')
+    expect(screen.getByRole('link', { name: /View members/ })).toHaveAttribute('href', '/org/users')
     expect(screen.getByRole('button', { name: 'Copy curl command' })).toBeInTheDocument()
     const code = screen.getByText(/chat\/completions/).textContent ?? ''
     expect(code).toContain('/v1/chat/completions')

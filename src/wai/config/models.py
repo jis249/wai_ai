@@ -213,6 +213,28 @@ class ReliabilityConfig:
 
 
 @dataclass
+class SSOConfig:
+    """Global OIDC single sign-on (e.g. Microsoft Entra ID)."""
+
+    enabled: bool = False
+    issuer: str = ""
+    client_id: str = ""
+    client_secret: str = ""
+    redirect_url: str = ""
+    scopes: list[str] = field(default_factory=list)
+    allowed_domains: list[str] = field(default_factory=list)
+    auto_provision: bool = False
+    default_role: str = "member"
+    # New SSO users join this org; it is created at startup when default_org_name is set and it is missing.
+    default_org_slug: str = ""
+    default_org_name: str = ""
+    # Existing users still in this org are moved into default_org_slug on their next SSO login.
+    migrate_from_org_slug: str = ""
+    group_sync: bool = False
+    group_claim: str = ""
+
+
+@dataclass
 class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
@@ -224,3 +246,4 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     pricing: PricingSyncConfig = field(default_factory=PricingSyncConfig)
     reliability: ReliabilityConfig = field(default_factory=ReliabilityConfig)
+    sso: SSOConfig = field(default_factory=SSOConfig)

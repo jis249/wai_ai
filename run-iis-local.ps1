@@ -58,9 +58,22 @@ if ($backend) {
     $backendProcess = Get-Process -Id $backendProcessId -ErrorAction SilentlyContinue
     $venvPython = Join-Path $Root ".venv\Scripts\python.exe"
 
-    if ($backendProcess -and $backendProcess.Path -eq $venvPython) {
+    # The venv python.exe is a launcher; the process that owns the port is usually its child
+    # (the base interpreter), so also match on the parent's path.
+    $parent = $null
+    $isWaiBackend = $backendProcess -and $backendProcess.Path -eq $venvPython
+    if (-not $isWaiBackend -and $backendProcess -and $backendProcess.ProcessName -like "python*") {
+        $parentId = (Get-CimInstance Win32_Process -Filter "ProcessId=$backendProcessId").ParentProcessId
+        $parent = Get-Process -Id $parentId -ErrorAction SilentlyContinue
+        $isWaiBackend = $parent -and $parent.Path -eq $venvPython
+    }
+
+    if ($isWaiBackend) {
+        if ($parent) {
+            Stop-Process -Id $parent.Id -Force -ErrorAction SilentlyContinue
+        }
         Write-Host "Restarting WAI backend on $BackendUrl..."
-        Stop-Process -Id $backendProcessId -Force
+        Stop-Process -Id $backendProcessId -Force -ErrorAction SilentlyContinue
         for ($i = 0; $i -lt 20; $i++) {
             Start-Sleep -Milliseconds 500
             $backend = Get-NetTCPConnection -LocalPort $backendPort -State Listen -ErrorAction SilentlyContinue

@@ -20,7 +20,8 @@ from wai.api.admin.models import reload_admin_model_registry
 from wai.api.health.routes import register_health_routes
 from wai.audit.logger import AuditLogger
 from wai.audit.middleware import AuditMiddleware
-from wai.auth.bootstrap import bootstrap, print_bootstrap_credentials
+from wai.auth.bootstrap import bootstrap, ensure_sso_default_org, print_bootstrap_credentials
+from wai.auth.oidc import build_sso_provider
 from wai.config import load
 from wai.config.models import Config as ConfigModel
 from wai.crypto.aes import parse_key
@@ -135,6 +136,8 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
             brute_force=brute_force,
             audit_logger=audit_logger,
             update_checker=UpdateChecker(),
+            sso_config=cfg.sso,
+            sso_provider=await build_sso_provider(cfg.sso, logger),
             # Internal MCP servers (private IPs / split-horizon DNS) need WAI_MCP_ALLOW_PRIVATE_URLS=true.
             mcp_allow_private_urls=os.environ.get("WAI_MCP_ALLOW_PRIVATE_URLS", "").lower() in ("1", "true", "yes"),
         )
@@ -150,6 +153,7 @@ def create_app(config: ConfigModel | None = None, config_path: str = "") -> Fast
         )
         if state["bootstrap_result"] is not None:
             await reload_access_cache(db, access_cache)
+        await ensure_sso_default_org(db, cfg.sso, logger)
         # Show first-run credentials at startup (not on shutdown, where they were missed).
         print_bootstrap_credentials(state["bootstrap_result"])
 

@@ -10,7 +10,7 @@ import { ConfirmDialog } from '../components/ui/Dialog'
 import { Card } from '../components/ui/Card'
 import { Tooltip } from '../components/ui/Tooltip'
 import { SkeletonText } from '../components/ui/Skeleton'
-import { useMe } from '../hooks/useMe'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { useToast } from '../hooks/useToast'
 import {
   useOrgSSO,
@@ -597,8 +597,8 @@ function SSOForm({ orgId, initial, hasExistingConfig, onDelete }: SSOFormProps) 
 
 export default function OrgDetailSSOTab() {
   const { orgId: paramOrgId = '' } = useParams<{ orgId: string }>()
-  const { data: me } = useMe()
-  const orgId = paramOrgId || me?.org_id || ''
+  const activeOrgId = useActiveOrgId()
+  const orgId = paramOrgId || activeOrgId
   const [editMode, setEditMode] = useState(false)
 
   const orgSSO = useOrgSSO(orgId)

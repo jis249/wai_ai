@@ -1,18 +1,17 @@
 import { useMemo, useState } from 'react'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { useNavigate } from 'react-router-dom'
 import { Select } from '../components/ui/Select'
 import { Skeleton } from '../components/ui/Skeleton'
 import { EmptyState } from '../components/ui/EmptyState'
 import { ErrorState } from '../components/ui/ErrorState'
 import { Users } from '../components/ui/icons'
-import { useMe } from '../hooks/useMe'
 import { useTeams } from '../hooks/useTeams'
 import TeamModelsTab from './TeamModelsTab'
 import TeamMCPAccessTab from './TeamMCPAccessTab'
 
 export default function TeamAccessPanel({ kind }: { kind: 'models' | 'mcp' }) {
-  const { data: me } = useMe()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
   const teamsQuery = useTeams(orgId)
   const { data, isLoading } = teamsQuery
   const navigate = useNavigate()

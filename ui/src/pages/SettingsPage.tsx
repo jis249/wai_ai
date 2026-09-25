@@ -3,7 +3,7 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { Building2 } from '../components/ui/icons'
 import { OrgSettingsForm } from '../components/settings/OrgSettingsForm'
 import { SettingsSkeleton } from '../components/settings/SettingsSkeleton'
-import { useMe } from '../hooks/useMe'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { useOrg } from '../hooks/useOrg'
 import { usePermissions } from '../hooks/usePermissions'
 
@@ -12,9 +12,8 @@ import { usePermissions } from '../hooks/usePermissions'
  * read-only for them (managed by the system administrator). Members see everything read-only.
  */
 export default function SettingsPage() {
-  const { data: me } = useMe()
   const perms = usePermissions()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
   const orgQuery = useOrg(orgId)
 
   if (!perms.isReady) {

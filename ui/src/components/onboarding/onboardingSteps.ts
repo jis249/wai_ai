@@ -69,11 +69,11 @@ export function onboardingSteps(status: OnboardingStatus | undefined, viewer: On
     {
       step: {
         id: 'invite',
-        title: 'Invite a teammate',
-        description: 'Bring your team in and give them their own keys.',
+        title: 'Get your team signed in',
+        description: 'Teammates join by signing in with Microsoft; then assign roles and teams.',
         done: !!status?.has_members,
-        href: '/org?invite=1',
-        actionLabel: 'Invite',
+        href: '/org/users',
+        actionLabel: 'View members',
       },
       visible: viewer.isOrgAdmin,
     },

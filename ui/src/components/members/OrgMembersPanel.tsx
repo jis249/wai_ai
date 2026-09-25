@@ -1,8 +1,7 @@
 import { useState } from 'react'
-import { Button } from '../ui/Button'
 import { StatCard } from '../ui/StatCard'
 import { EmptyState } from '../ui/EmptyState'
-import { ShieldCheck, UserPlus, Users } from '../ui/icons'
+import { ShieldCheck, Users } from '../ui/icons'
 import {
   useOrgMembers,
   useDeleteOrgMember,
@@ -15,8 +14,6 @@ import { useToast } from '../../hooks/useToast'
 import type { UserResponse } from '../../hooks/useUsers'
 import { errorMessage } from '../../lib/errors'
 import { MembersTable } from './MembersTable'
-import { InviteUserDialog } from './InviteUserDialog'
-import { DeepLinkParam } from '../onboarding/DeepLinkParam'
 import { ChangeRoleDialog } from './ChangeRoleDialog'
 import { RemoveMemberDialog } from './RemoveMemberDialog'
 import { useCursorPager } from './listState'
@@ -31,7 +28,7 @@ function targetName(user: UserResponse | undefined): string {
   return user?.display_name || user?.email || 'this member'
 }
 
-/** Org members management (stats, searchable table, invite / change role / remove). */
+/** Org members management (stats, searchable table, change role / remove). Users join via SSO. */
 export function OrgMembersPanel({ orgId }: { orgId: string }) {
   const { data: me } = useMe()
   const perms = usePermissions()
@@ -42,7 +39,6 @@ export function OrgMembersPanel({ orgId }: { orgId: string }) {
   const deleteMember = useDeleteOrgMember(orgId)
   const updateMember = useUpdateOrgMember(orgId)
 
-  const [showInvite, setShowInvite] = useState(false)
   const [roleTarget, setRoleTarget] = useState<Target | null>(null)
   const [removeTarget, setRemoveTarget] = useState<Target | null>(null)
 
@@ -85,10 +81,9 @@ export function OrgMembersPanel({ orgId }: { orgId: string }) {
   return (
     <>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="min-w-0 text-sm text-text-secondary">People with access to this organization.</p>
-        <Button icon={<UserPlus className="h-4 w-4" />} onClick={() => setShowInvite(true)}>
-          Invite member
-        </Button>
+        <p className="min-w-0 text-sm text-text-secondary">
+          People with access to this organization. New people join by signing in with Microsoft.
+        </p>
       </div>
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -121,14 +116,11 @@ export function OrgMembersPanel({ orgId }: { orgId: string }) {
           <EmptyState
             icon={<Users className="h-6 w-6" />}
             title="No members yet"
-            description="Invite people to join this organization."
-            action={{ label: 'Invite member', onClick: () => setShowInvite(true) }}
+            description="People appear here after they sign in with Microsoft."
           />
         }
       />
 
-      {perms.canManageMembers && <DeepLinkParam name="invite" onMatch={() => setShowInvite(true)} />}
-      <InviteUserDialog open={showInvite} onClose={() => setShowInvite(false)} orgId={orgId} roleOptions={roleOptions} />
 
       <ChangeRoleDialog
         open={roleTarget !== null}

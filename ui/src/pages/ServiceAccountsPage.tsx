@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Table } from '../components/ui/Table'
 import type { Column, SortState } from '../components/ui/Table'
@@ -11,7 +12,6 @@ import { IconButton } from '../components/ui/IconButton'
 import { EmptyState } from '../components/ui/EmptyState'
 import { ErrorState } from '../components/ui/ErrorState'
 import { Bot, Building2, Info, Pencil, Plus, Search, Trash2, Users } from '../components/ui/icons'
-import { useMe } from '../hooks/useMe'
 import { useServiceAccounts, useDeleteServiceAccount } from '../hooks/useServiceAccounts'
 import type { ServiceAccountResponse } from '../hooks/useServiceAccounts'
 import { useTeams } from '../hooks/useTeams'
@@ -49,8 +49,7 @@ function sortServiceAccounts(
 }
 
 export default function ServiceAccountsPage({ hideHeader = false }: { hideHeader?: boolean }) {
-  const { data: me } = useMe()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
 
   const [cursor, setCursor] = useState<string | undefined>()
   const [prevCursors, setPrevCursors] = useState<string[]>([])

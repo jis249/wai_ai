@@ -60,7 +60,7 @@ export function AddTeamMemberDialog({ open, onClose, orgId, teamId, existingMemb
     <Dialog open={open} onClose={handleClose} title="Add team member">
       <form onSubmit={handleSubmit} className="space-y-4" noValidate>
         <p className="text-xs text-text-tertiary">
-          Only members of this organization can be added. Invite new people from the organization Members page first.
+          Only members of this organization can be added. New people appear after they sign in with Microsoft.
         </p>
         <Select
           label="Organization member"

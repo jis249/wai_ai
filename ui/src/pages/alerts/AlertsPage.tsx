@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useActiveOrgId } from '../../hooks/useActiveOrg'
 import { PageHeader } from '../../components/ui/PageHeader'
 import { SegmentedControl } from '../../components/ui/SegmentedControl'
 import { Select } from '../../components/ui/Select'
@@ -6,7 +7,6 @@ import { EmptyState } from '../../components/ui/EmptyState'
 import { SkeletonText } from '../../components/ui/Skeleton'
 import { Building2, Lock, Server } from '../../components/ui/icons'
 import { usePermissions } from '../../hooks/usePermissions'
-import { useMe } from '../../hooks/useMe'
 import { useAlertOrgOptions } from '../../hooks/useAlerts'
 import { ChannelsCard } from './ChannelsCard'
 import { RulesCard } from './RulesCard'
@@ -16,7 +16,7 @@ type ScopeMode = 'platform' | 'org'
 
 export default function AlertsPage() {
   const perms = usePermissions()
-  const { data: me } = useMe()
+  const activeOrgId = useActiveOrgId()
   const [mode, setMode] = useState<ScopeMode>('platform')
   const [pickedOrg, setPickedOrg] = useState<string>('')
   const orgs = useAlertOrgOptions(perms.isSystemAdmin)
@@ -45,7 +45,7 @@ export default function AlertsPage() {
     )
   }
 
-  const ownOrg = me?.org_id ?? ''
+  const ownOrg = activeOrgId
   const isSys = perms.isSystemAdmin
   const orgId = isSys ? pickedOrg || ownOrg : ownOrg
   const scope = isSys && mode === 'platform' ? '' : orgId

@@ -79,11 +79,12 @@ describe('deep links', () => {
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/mcp$/))
   })
 
-  it('/org/users?invite=1 opens the invite dialog for org admins', async () => {
+  it('?invite=1 no longer opens an invite dialog (users join via SSO)', async () => {
     mockApi('org_admin')
     renderAt('/org/users?invite=1', <OrgMembersPanel orgId="o1" />)
-    expect(await screen.findByRole('dialog', { name: 'Invite member' })).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/org\/users$/))
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([u]) => String(u).endsWith('/me'))).toBe(true))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByRole('dialog', { name: 'Invite member' })).not.toBeInTheDocument()
   })
 
   it('?invite=1 is ignored for members', async () => {

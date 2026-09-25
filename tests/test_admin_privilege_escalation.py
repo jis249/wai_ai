@@ -308,7 +308,7 @@ class _Req:
 
 @pytest.fixture
 def oidc(h, monkeypatch):
-    created = {"users": [], "memberships": []}
+    created = {"users": [], "memberships": [], "linked": [], "existing": None, "linkable": True}
 
     async def exchange(code, nonce):
         return h.next_claims
@@ -321,6 +321,13 @@ def oidc(h, monkeypatch):
 
     async def get_user_by_external_id(db, provider, sub):
         return None
+
+    async def get_user_by_email(db, email, **kw):
+        return created["existing"]
+
+    async def link_external_identity(db, uid, provider, sub):
+        created["linked"].append((uid, provider, sub))
+        return created["linkable"]
 
     async def get_org_by_slug(db, slug):
         return {"id": "ORG-ACME", "slug": slug} if slug == "acme" else None
@@ -340,6 +347,8 @@ def oidc(h, monkeypatch):
 
     for name, fn in {
         "get_user_by_external_id": get_user_by_external_id,
+        "get_user_by_email": get_user_by_email,
+        "link_external_identity": link_external_identity,
         "get_org_by_slug": get_org_by_slug,
         "create_user": create_user,
         "create_org_membership": create_org_membership,
@@ -428,3 +437,67 @@ async def test_setup_status_first_run_gets_details(h, setup_env):
     h.db = _SetupDB(0)
     out = await setup.setup_status(SimpleNamespace())
     assert out["details_redacted"] is False and out["ready"] is False
+
+
+async def test_oidc_links_existing_account_when_domain_allowlisted(h, oidc):
+    oidc["existing"] = {"id": "old-user", "display_name": "A"}
+    r = await auth.oidc_callback(_Req(), code="c", state="s")
+    assert oidc["linked"] == [("old-user", "oidc", h.next_claims.subject)]
+    assert oidc["users"] == [] and oidc["memberships"] == []
+    assert r.headers["location"] == "/login?error=not_provisioned"  # resolve_user_role stub stops here
+
+
+async def test_oidc_refuses_link_without_allowlist_or_when_already_linked(h, oidc):
+    oidc["existing"] = {"id": "old-user", "display_name": "A"}
+    oidc["linkable"] = False
+    r = await auth.oidc_callback(_Req(), code="c", state="s")
+    assert r.headers["location"] == "/login?error=account_exists"
+    h.sso_config.allowed_domains = []
+    oidc["linked"].clear()
+    r = await auth.oidc_callback(_Req(), code="c", state="s")
+    assert r.headers["location"] == "/login?error=account_exists"
+    assert oidc["linked"] == [] and oidc["users"] == []
+
+
+async def test_oidc_moves_existing_user_out_of_migrate_org(h, oidc, monkeypatch):
+    moved, refreshed = [], []
+
+    async def get_user_by_external_id(db, provider, sub):
+        return {"id": "sso-user", "display_name": "A"}
+
+    async def get_org_by_slug(db, slug):
+        return {"id": f"ORG-{slug}", "slug": slug} if slug in ("acme", "default") else None
+
+    async def move_user_to_org(db, uid, src, dst):
+        moved.append((uid, src, dst))
+        return True
+
+    async def refresh_keys(**kw):
+        refreshed.append(kw)
+
+    monkeypatch.setattr(auth.repo, "get_user_by_external_id", get_user_by_external_id)
+    monkeypatch.setattr(auth.repo, "get_org_by_slug", get_org_by_slug)
+    monkeypatch.setattr(auth.repo, "move_user_to_org", move_user_to_org)
+    h.refresh_keys = refresh_keys
+    h.log = SimpleNamespace(warning=lambda *a, **k: None)
+    h.sso_config.migrate_from_org_slug = "default"
+    await auth.oidc_callback(_Req(), code="c", state="s")
+    assert moved == [("sso-user", "ORG-default", "ORG-acme")]
+    assert refreshed == [{"user_id": "sso-user"}]
+    assert oidc["users"] == [] and oidc["memberships"] == []
+
+    moved.clear()
+    h.sso_config.migrate_from_org_slug = ""
+    await auth.oidc_callback(_Req(), code="c", state="s")
+    assert moved == []
+
+
+@pytest.mark.parametrize("issuer,brand", [
+    ("https://login.microsoftonline.com/tid/v2.0", "microsoft"),
+    ("https://sts.windows.net/tid/", "microsoft"),
+    ("https://accounts.google.com", ""),
+    ("https://login.microsoftonline.com.evil.com/tid/v2.0", ""),
+    ("", ""),
+])
+def test_oidc_brand(issuer, brand):
+    assert auth._oidc_brand(issuer) == brand

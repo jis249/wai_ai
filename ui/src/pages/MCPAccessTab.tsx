@@ -1,4 +1,4 @@
-import { useMe } from '../hooks/useMe'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { usePermissions } from '../hooks/usePermissions'
 import { useOrgMCPAccess, useSetOrgMCPAccess, useAvailableGlobalMCPServers } from '../hooks/useMCPAccess'
 import { useToast } from '../hooks/useToast'
@@ -10,9 +10,8 @@ import { Globe, ShieldCheck } from '../components/ui/icons'
 import { ServerAccessChecklist } from './mcp/ServerAccessChecklist'
 
 export default function MCPAccessTab() {
-  const { data: me } = useMe()
   const { canManageOrg, isReady } = usePermissions()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
 
   const serversQuery = useAvailableGlobalMCPServers(orgId)
   const accessQuery = useOrgMCPAccess(orgId)

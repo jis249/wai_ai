@@ -8,6 +8,7 @@ import { AreaChart } from '../../components/ui/charts'
 import { Activity, ArrowRight, ChartColumn, CircleCheck, Clock, DollarSign, Sparkles, Wrench } from '../../components/ui/icons'
 import { StatCardSkeletons } from '../../components/analytics/StatCardSkeletons'
 import { useMe } from '../../hooks/useMe'
+import { useActiveOrgId } from '../../hooks/useActiveOrg'
 import { useUsage, useMyUsage } from '../../hooks/useUsage'
 import { useMCPUsage, useMyMCPUsage } from '../../hooks/useMCPUsage'
 import { chartColor } from '../../lib/chartColors'
@@ -63,7 +64,7 @@ function TrendEmpty({ description }: { description: string }) {
 
 export default function UsageOverviewPage() {
   const { data: me } = useMe()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
   const canViewOrgUsage = me?.is_system_admin === true || me?.role === 'org_admin'
 
   const { from: from24h, to: to24h } = useTimeRange('24h')

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -242,10 +243,19 @@ async def available_models(key_info: KeyInfo = Depends(auth_middleware)) -> Avai
 
 # --- Auth providers & OIDC ---
 
+def _oidc_brand(issuer: str) -> str:
+    """Identity-provider brand for the login button ('' = generic SSO)."""
+    host = (urlparse(issuer).hostname or "").lower()
+    if host in ("login.microsoftonline.com", "login.microsoft.com", "sts.windows.net"):
+        return "microsoft"
+    return ""
+
+
 @router.get("/auth/providers")
-async def auth_providers() -> dict[str, bool]:
+async def auth_providers() -> dict[str, bool | str]:
     h = get_handler()
-    return {"local": True, "oidc": h.sso_provider is not None}
+    enabled = h.sso_provider is not None
+    return {"local": True, "oidc": enabled, "oidc_brand": _oidc_brand(h.sso_config.issuer) if enabled else ""}
 
 
 @router.get("/auth/oidc/login")
@@ -264,6 +274,9 @@ async def oidc_login(request: Request) -> RedirectResponse:
     )
     return response
 
+
+# The one-time session cookie must reach the exchange endpoint the /auth/callback page POSTs to.
+_OIDC_EXCHANGE_PATH = "/api/v1/auth/oidc/exchange"
 
 _OIDC_PROVISION_ROLES = {ROLE_MEMBER, ROLE_ORG_ADMIN}
 
@@ -300,6 +313,20 @@ def _oidc_identity_denial(sso_config, claims) -> str:
     return ""
 
 
+async def _migrate_to_sso_org(h, user_id: str) -> None:
+    """Move an existing user out of sso.migrate_from_org_slug into sso.default_org_slug."""
+    cfg = h.sso_config
+    if not cfg.migrate_from_org_slug or not cfg.default_org_slug or cfg.migrate_from_org_slug == cfg.default_org_slug:
+        return
+    src = await repo.get_org_by_slug(h.db, cfg.migrate_from_org_slug)
+    dst = await repo.get_org_by_slug(h.db, cfg.default_org_slug)
+    if src is None or dst is None:
+        return
+    if await repo.move_user_to_org(h.db, user_id, src["id"], dst["id"]):
+        await h.refresh_keys(user_id=user_id)
+        h.log.warning("moved SSO user %s from org %s to %s", user_id, src["slug"], dst["slug"])
+
+
 @router.get("/auth/oidc/callback")
 async def oidc_callback(request: Request, code: str = "", state: str = "") -> RedirectResponse:
     h = get_handler()
@@ -318,12 +345,23 @@ async def oidc_callback(request: Request, code: str = "", state: str = "") -> Re
         return RedirectResponse("/login?error=missing_code")
     try:
         claims = await h.sso_provider.exchange(code, cookie_nonce)
-    except Exception:
+    except Exception as exc:
+        h.log.warning("SSO code exchange failed: %s", exc)
         return RedirectResponse("/login?error=exchange_failed")
     denial = _oidc_identity_denial(h.sso_config, claims)
     if denial:
         return RedirectResponse(f"/login?error={denial}")
     user = await repo.get_user_by_external_id(h.db, "oidc", claims.subject)
+    if user is None:
+        existing = await repo.get_user_by_email(h.db, claims.email)
+        if existing is not None:
+            # Link a pre-existing account only when the domain allowlist vouches for the email;
+            # its password still works and _migrate_to_sso_org below may move its org.
+            if not h.sso_config.allowed_domains or not await repo.link_external_identity(
+                h.db, existing["id"], "oidc", claims.subject
+            ):
+                return RedirectResponse("/login?error=account_exists")
+            user = existing
     if user is None:
         if not h.sso_config.auto_provision:
             return RedirectResponse("/login?error=not_provisioned")
@@ -338,6 +376,8 @@ async def oidc_callback(request: Request, code: str = "", state: str = "") -> Re
             password_hash=None, auth_provider="oidc", external_id=claims.subject,
         )
         await repo.create_org_membership(h.db, org["id"], user["id"], default_role)
+    else:
+        await _migrate_to_sso_org(h, user["id"])
     try:
         _, session_org_id = await repo.resolve_user_role(h.db, user["id"])
     except repo.NotFoundError:
@@ -361,7 +401,7 @@ async def oidc_callback(request: Request, code: str = "", state: str = "") -> Re
     except HTTPException:
         return RedirectResponse("/login?error=provision_failed")
     response.set_cookie(
-        "wai_oidc_token", key, max_age=10, httponly=True, samesite="strict", secure=secure, path="/auth/callback"
+        "wai_oidc_token", key, max_age=10, httponly=True, samesite="lax", secure=secure, path=_OIDC_EXCHANGE_PATH
     )
     return response
 
@@ -391,7 +431,7 @@ async def oidc_exchange(request: Request, response: Response) -> LoginResponse:
     user = await repo.get_user(h.db, info.user_id)
     if not user:
         raise unauthorized("invalid session")
-    response.delete_cookie("wai_oidc_token", path="/auth/callback")
+    response.delete_cookie("wai_oidc_token", path=_OIDC_EXCHANGE_PATH)
     expires_at_str = info.expires_at.strftime("%Y-%m-%dT%H:%M:%S+00:00") if info.expires_at else ""
     _log_auth_audit(
         h, request, action="auth.login", email=user["email"], org_id=info.org_id,

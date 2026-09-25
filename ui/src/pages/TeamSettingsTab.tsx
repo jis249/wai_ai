@@ -9,7 +9,7 @@ import { NameSlugFields } from '../components/settings/NameSlugFields'
 import { validateNameSlug, type NameSlugErrors } from '../components/settings/nameSlug'
 import { SettingsSkeleton } from '../components/settings/SettingsSkeleton'
 import { limitsDirty, limitsFromRecord, limitsToParams, type LimitsValues } from '../components/settings/limits'
-import { useMe } from '../hooks/useMe'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { usePermissions } from '../hooks/usePermissions'
 import { useTeam, useUpdateTeam, type TeamResponse } from '../hooks/useTeams'
 import { useToast } from '../hooks/useToast'
@@ -89,9 +89,8 @@ function TeamSettingsForm({ team, orgId, canEdit }: TeamSettingsFormProps) {
 
 export default function TeamSettingsTab() {
   const { teamId = '' } = useParams<{ teamId: string }>()
-  const { data: me } = useMe()
   const perms = usePermissions()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
   const teamQuery = useTeam(orgId, teamId)
 
   return (

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useActiveOrgId } from '../../hooks/useActiveOrg'
 import { StatCard } from '../../components/ui/StatCard'
 import { Table } from '../../components/ui/Table'
 import type { Column } from '../../components/ui/Table'
@@ -134,7 +135,7 @@ export default function LLMUsagePage() {
   const [compare, setCompare] = useState(false)
 
   const { data: me } = useMe()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
   const isSystemAdmin = me?.is_system_admin === true
   const canViewOrgUsage = isSystemAdmin || me?.role === 'org_admin'
 

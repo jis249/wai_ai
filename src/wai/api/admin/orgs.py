@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from wai.api.admin.common import (
     KeyInfo,
+    ROLE_MEMBER,
     ROLE_ORG_ADMIN,
     ROLE_SYSTEM_ADMIN,
     SLUG_RE,
@@ -176,7 +177,8 @@ async def list_orgs(
 @router.get("/orgs/{org_id}", response_model=OrgResponse)
 async def get_org(
     org_id: str,
-    key_info: KeyInfo = Depends(require_role(ROLE_ORG_ADMIN)),
+    # Members may read their own org (the read-only Organization > Settings view).
+    key_info: KeyInfo = Depends(require_role(ROLE_MEMBER)),
 ) -> OrgResponse:
     h = get_handler()
     if not has_role(key_info.role, ROLE_SYSTEM_ADMIN) and key_info.org_id != org_id:

@@ -27,13 +27,14 @@ export interface CreateOrgParams {
   slug: string
 }
 
-export function useOrgs(cursor?: string) {
+export function useOrgs(cursor?: string, enabled = true) {
   return useQuery({
     queryKey: ['orgs', cursor],
     queryFn: () =>
       apiClient<PaginatedOrgs>(
         `/orgs?limit=20${cursor ? `&cursor=${cursor}` : ''}`,
       ),
+    enabled,
   })
 }
 

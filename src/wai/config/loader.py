@@ -29,6 +29,7 @@ from wai.config.models import (
     ServerConfig,
     RateLimitConfig,
     SettingsConfig,
+    SSOConfig,
     TLSConfig,
     UsageConfig,
 )
@@ -292,6 +293,7 @@ def _from_dict(data: dict[str, Any]) -> Config:
     )
     cfg.pricing = _pricing_sync(data.get("pricing") or {})
     cfg.reliability = _reliability(data.get("reliability") or {})
+    cfg.sso = _sso(data.get("sso") or {})
     _set_defaults(cfg)
     return cfg
 
@@ -314,6 +316,43 @@ def _pricing_sync(raw: dict[str, Any]) -> PricingSyncConfig:
         auto_sync_interval_hours=_num("auto_sync_interval_hours", defaults.auto_sync_interval_hours),
         timeout_seconds=_num("timeout_seconds", defaults.timeout_seconds),
         max_bytes=int(_num("max_bytes", defaults.max_bytes)),
+    )
+
+
+def _str_list(raw: Any) -> list[str]:
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    if not isinstance(raw, list):
+        return []
+    return [str(v).strip() for v in raw if v is not None and str(v).strip()]
+
+
+def _sso(raw: dict[str, Any]) -> SSOConfig:
+    """Parse the top-level ``sso:`` block (global OIDC login, e.g. Microsoft Entra ID)."""
+    if not isinstance(raw, dict):
+        return SSOConfig()
+
+    def _flag(key: str) -> bool:
+        value = raw.get(key)
+        return value if isinstance(value, bool) else str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+    org_name = str(raw.get("default_org_name") or "").strip()
+    org_slug = str(raw.get("default_org_slug") or "").strip() or (_derive_slug(org_name) if org_name else "")
+    return SSOConfig(
+        enabled=_flag("enabled"),
+        issuer=str(raw.get("issuer") or "").strip(),
+        client_id=str(raw.get("client_id") or "").strip(),
+        client_secret=str(raw.get("client_secret") or "").strip(),
+        redirect_url=str(raw.get("redirect_url") or "").strip(),
+        scopes=_str_list(raw.get("scopes")) or ["openid", "profile", "email"],
+        allowed_domains=_str_list(raw.get("allowed_domains")),
+        auto_provision=_flag("auto_provision"),
+        default_role=str(raw.get("default_role") or "member").strip(),
+        default_org_slug=org_slug,
+        default_org_name=org_name,
+        migrate_from_org_slug=str(raw.get("migrate_from_org_slug") or "").strip(),
+        group_sync=_flag("group_sync"),
+        group_claim=str(raw.get("group_claim") or "").strip(),
     )
 
 

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PageHeader } from '../components/ui/PageHeader'
@@ -47,7 +48,7 @@ interface RevealState {
 export default function KeysPage({ hideHeader = false }: { hideHeader?: boolean }) {
   const { data: me } = useMe()
   const { canManageKeys } = usePermissions()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
   const navigate = useNavigate()
 
   const [cursor, setCursor] = useState<string | undefined>()

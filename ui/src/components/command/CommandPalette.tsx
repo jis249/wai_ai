@@ -21,7 +21,6 @@ import {
   Search,
   Sun,
   Terminal,
-  UserPlus,
   type LucideIcon,
 } from '../ui/icons'
 
@@ -114,7 +113,6 @@ function PaletteContent({ onClose, role, recentPaths, onShowShortcuts }: Omit<Co
     { id: 'new-key', label: 'Create API key', icon: KeyRound, keywords: ['new key', 'token'], run: () => go('/keys?new=1') },
     { id: 'new-model', label: 'Add model', icon: Plus, keywords: ['new model', 'provider'], minRole: 'system_admin', run: () => go('/models?new=1') },
     { id: 'new-mcp', label: 'Add MCP server', icon: Plug, keywords: ['new server', 'tools'], minRole: 'team_admin', run: () => go('/mcp?new=1') },
-    { id: 'invite', label: 'Invite member', icon: UserPlus, keywords: ['add user', 'invite'], minRole: 'org_admin', run: () => go('/org?invite=1') },
     { id: 'playground', label: 'Open playground', icon: Terminal, keywords: ['chat'], shortcut: shortcutForPath('/playground'), run: () => go('/playground') },
     {
       id: 'theme',

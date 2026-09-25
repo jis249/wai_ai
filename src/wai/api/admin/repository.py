@@ -264,6 +264,50 @@ async def get_user_by_external_id(db: Database, provider: str, external_id: str)
     return d
 
 
+async def link_external_identity(db: Database, user_id: str, provider: str, external_id: str) -> bool:
+    """Attach an IdP identity to a user that has none yet. Returns False if already linked elsewhere."""
+    cur = await db.execute(
+        """UPDATE users SET auth_provider = ?, external_id = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE id = ? AND deleted_at IS NULL AND (external_id IS NULL OR external_id = '')""",
+        (provider, external_id, user_id),
+    )
+    await db.commit()
+    return cur.rowcount > 0
+
+
+async def move_user_to_org(db: Database, user_id: str, from_org_id: str, to_org_id: str) -> bool:
+    """Move a user's membership (same role) and personal API keys from one org to another.
+
+    Returns False when the user is not a member of from_org_id. Team memberships in the old org are
+    dropped, since teams never span orgs.
+    """
+    row = await db.fetchone(
+        "SELECT id FROM org_memberships WHERE user_id = ? AND org_id = ?", (user_id, from_org_id)
+    )
+    if not row:
+        return False
+    already = await db.fetchone(
+        "SELECT id FROM org_memberships WHERE user_id = ? AND org_id = ?", (user_id, to_org_id)
+    )
+    async with db.transaction() as conn:
+        if already:
+            await conn.execute("DELETE FROM org_memberships WHERE id = ?", (row["id"],))
+        else:
+            # Keep created_at so the moved membership stays the one sessions resolve to.
+            await conn.execute("UPDATE org_memberships SET org_id = ? WHERE id = ?", (to_org_id, row["id"]))
+        await conn.execute(
+            """DELETE FROM team_memberships WHERE user_id = ?
+               AND team_id IN (SELECT id FROM teams WHERE org_id = ?)""",
+            (user_id, from_org_id),
+        )
+        await conn.execute(
+            """UPDATE api_keys SET org_id = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE user_id = ? AND org_id = ? AND key_type = 'user_key' AND team_id IS NULL""",
+            (to_org_id, user_id, from_org_id),
+        )
+    return True
+
+
 async def get_user_password_hash(db: Database, email: str) -> tuple[str, str]:
     row = await db.fetchone(
         "SELECT id, password_hash FROM users WHERE email = ? AND deleted_at IS NULL",

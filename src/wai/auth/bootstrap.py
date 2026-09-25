@@ -14,7 +14,7 @@ from wai.api.admin.common import (
     ROLE_ORG_ADMIN,
     new_uuid,
 )
-from wai.config.models import SettingsConfig
+from wai.config.models import SSOConfig, SettingsConfig
 from wai.db.connection import Database
 
 
@@ -105,3 +105,25 @@ def print_bootstrap_credentials(result: BootstrapResult | None) -> None:
     print(f"  Password:   {result.password}", file=sys.stderr)
     print("========================================", file=sys.stderr)
     print("", file=sys.stderr)
+
+
+async def ensure_sso_default_org(db: Database, sso: SSOConfig, log: logging.Logger | None = None) -> None:
+    """Create the org that new SSO users are provisioned into, if it does not exist yet.
+
+    Model access is not granted here; an admin chooses the org's models in the dashboard.
+    """
+    logger = log or logging.getLogger("wai.bootstrap")
+    if not sso.enabled or not sso.auto_provision or not sso.default_org_slug or not sso.default_org_name:
+        return
+    row = await db.fetchone(
+        "SELECT id FROM organizations WHERE slug = ? AND deleted_at IS NULL", (sso.default_org_slug,)
+    )
+    if row:
+        return
+    await db.execute(
+        "INSERT INTO organizations (id, name, slug, created_at, updated_at) "
+        "VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        (new_uuid(), sso.default_org_name, sso.default_org_slug),
+    )
+    await db.commit()
+    logger.warning("created SSO default organization %r (slug %s)", sso.default_org_name, sso.default_org_slug)

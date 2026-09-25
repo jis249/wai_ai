@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useActiveOrgId } from '../hooks/useActiveOrg'
 import { useQuery } from '@tanstack/react-query'
 import apiClient from '../api/client'
 import { PageHeader } from '../components/ui/PageHeader'
@@ -12,7 +13,6 @@ import { Activity, CirclePause, HeartPulse, Plus, Search, Server } from '../comp
 import { useOrgMCPServers, useDeleteMCPServer } from '../hooks/useMCPServers'
 import type { MCPServerResponse } from '../hooks/useMCPServers'
 import { useMCPServerHealth } from '../hooks/useMCPServerHealth'
-import { useMe } from '../hooks/useMe'
 import { usePermissions } from '../hooks/usePermissions'
 import { useToast } from '../hooks/useToast'
 import { errorMessage } from '../lib/errors'
@@ -31,9 +31,8 @@ export default function MCPServersPage({ hideHeader = false }: { hideHeader?: bo
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<ServerSort | null>(null)
 
-  const { data: me } = useMe()
   const perms = usePermissions()
-  const orgId = me?.org_id ?? ''
+  const orgId = useActiveOrgId()
   const { isSystemAdmin, isOrgAdmin, isTeamAdmin } = perms
   const canCreate = isTeamAdmin
 
@@ -63,7 +62,7 @@ export default function MCPServersPage({ hideHeader = false }: { hideHeader?: bo
   const activeCount = allServers.filter((s) => s.is_active).length
   const healthyCount = allServers.filter((s) => healthMap.get(s.id)?.status === 'healthy').length
 
-  const canWrite = (s: MCPServerResponse) => canWriteServer(s, perms, me?.org_id)
+  const canWrite = (s: MCPServerResponse) => canWriteServer(s, perms, orgId)
 
   function handleToggleExpand(key: string) {
     setExpandedKeys((prev) => {
